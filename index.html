@@ -38,12 +38,15 @@
 
     <!-- Firebase JS SDK Modules -->
     <script type="module">
-        // Change your imports to look exactly like this:
+        //*
         import { initializeApp } from "https://gstatic.com";
         import { getDatabase, ref, set, onChildAdded, remove } from "https://gstatic.com";
-
-
-        // TODO: Replace with your actual Firebase project configuration
+        /*/
+        import { initializeApp } from "./firebase-app.js";
+        import { getDatabase, ref, set, onChildAdded, remove } from "./firebase-database.js";
+        //*/
+        
+        // Replace with your actual Firebase project configuration
         const firebaseConfig = {
             apiKey: "AIzaSyB2F_QfZFAwitJrFEcvCTadOsLOVETkRpg",
             authDomain: "p2p-meeting-c4e09.firebaseapp.com",
