@@ -47,6 +47,15 @@
 
     <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
 
+    <div class="input-group">
+        <label for="audioSource">Microphone:</label>
+        <select id="audioSource"></select>
+    </div>
+    <div class="input-group">
+        <label for="videoSource">Camera:</label>
+        <select id="videoSource"></select>
+    </div>
+
     <div class="video-container">
         <div class="video-box">
             <video id="localVideo" autoplay playsinline muted></video>
@@ -105,6 +114,31 @@
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
 
+        async function discoverDevices() {
+            const audioSelect = document.getElementById('audioSource');
+            const videoSelect = document.getElementById('videoSource');
+            
+            // Fetch all connected audio and video hardware
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            
+            // Clear existing options
+            audioSelect.innerHTML = '';
+            videoSelect.innerHTML = '';
+
+            devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+
+                if (device.kind === 'audioinput') {
+                    option.text = device.label || `Microphone ${audioSelect.length + 1}`;
+                    audioSelect.appendChild(option);
+                } else if (device.kind === 'videoinput') {
+                    option.text = device.label || `Camera ${videoSelect.length + 1}`;
+                    videoSelect.appendChild(option);
+                }
+            });
+        }
+
         // Step 1: Open Local Hardware Feed
         async function init() {
             try {
@@ -122,8 +156,12 @@
                     }
                 };
 
+                // Request hardware access first (triggers browser permission pop-up)
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 localVideo.srcObject = localStream;
+
+                // Scan the available hardware and populate your dropdown menus
+                await discoverDevices();
             } catch (err) {
                 statusText.innerText = "Error: System camera/microphone access denied.";
                 console.error(err);
@@ -291,6 +329,87 @@
                 camBtn.setAttribute('data-off', !isCamOff);
                 camBtn.innerText = isCamOff ? "Turn Camera Off" : "Turn Camera On";
                 camBtn.style.background = isCamOff ? "#1a73e8" : "#ea4335";
+            }
+        });
+
+        // Seamless Video Camera Switcher
+        document.getElementById('videoSource').addEventListener('change', async (event) => {
+            const videoDeviceId = event.target.value;
+            if (!videoDeviceId) return;
+
+            try {
+                // Capture new camera using your lightweight bandwidth constraints
+                const newStream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        deviceId: { exact: videoDeviceId }, 
+                        width: { ideal: 640, max: 640 }, 
+                        height: { ideal: 480, max: 480 }, 
+                        frameRate: { ideal: 15, max: 15 } 
+                    }
+                });
+                
+                const newVideoTrack = newStream.getVideoTracks()[0];
+                const oldVideoTrack = localStream.getVideoTracks()[0];
+
+                // Swap the track in your local camera preview window
+                localStream.removeTrack(oldVideoTrack);
+                oldVideoTrack.stop(); // Turn off the old camera hardware to save battery
+                localStream.addTrack(newVideoTrack);
+                localVideo.srcObject = localStream;
+
+                // Seamlessly hot-swap the video track across the live connection to your friend
+                if (peerConnection) {
+                    const senders = peerConnection.getSenders();
+                    const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+                    if (videoSender) {
+                        await videoSender.replaceTrack(newVideoTrack);
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to switch camera source:", err);
+                alert("Could not switch to the selected camera hardware.");
+            }
+        });
+
+        // Seamless Microphone Switcher
+        document.getElementById('audioSource').addEventListener('change', async (event) => {
+            const audioDeviceId = event.target.value;
+            if (!audioDeviceId) return;
+
+            try {
+                // Capture new microphone using your echo/noise audio filters
+                const newStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { 
+                        deviceId: { exact: audioDeviceId },
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                const newAudioTrack = newStream.getAudioTracks()[0];
+                const oldAudioTrack = localStream.getAudioTracks()[0];
+
+                // If your mute button is currently active, ensure the new track matches that state
+                const isCurrentlyMuted = document.getElementById('muteBtn').getAttribute('data-muted') === 'true';
+                newAudioTrack.enabled = !isCurrentlyMuted;
+
+                // Swap the track in your local processing memory
+                localStream.removeTrack(oldAudioTrack);
+                oldAudioTrack.stop(); // Shut down old microphone hardware processing
+                localStream.addTrack(newAudioTrack);
+
+                // Seamlessly hot-swap the audio track across the live connection to your friend
+                if (peerConnection) {
+                    const senders = peerConnection.getSenders();
+                    const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                    if (audioSender) {
+                        await audioSender.replaceTrack(newAudioTrack);
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to switch microphone source:", err);
+                alert("Could not switch to the selected microphone hardware.");
             }
         });
 
