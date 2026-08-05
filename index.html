@@ -108,7 +108,21 @@
         // Step 1: Open Local Hardware Feed
         async function init() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                // Optimized media constraints for maximum audio stability
+                const constraints = { 
+                    video: {
+                        width: { ideal: 640, max: 640 },
+                        height: { ideal: 480, max: 480 },
+                        frameRate: { ideal: 15, max: 15 } // Cuts video data transmission in half
+                    }, 
+                    audio: {
+                        echoCancellation: true, // Prevents feedback loops
+                        noiseSuppression: true, // Filters background hums
+                        autoGainControl: true // Prevents clipping if you speak too loudly
+                    }
+                };
+
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 localVideo.srcObject = localStream;
             } catch (err) {
                 statusText.innerText = "Error: System camera/microphone access denied.";
@@ -120,9 +134,38 @@
         function createPeerConnection(roomName) {
             peerConnection = new RTCPeerConnection(rtcConfig);
 
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
+            // 1. Add the Audio Track with MAX Priority
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                peerConnection.addTransceiver(audioTrack, {
+                    direction: "sendrecv",
+                    streams: [localStream],
+                    sendEncodings: [
+                        { priority: "very-high" } // Tells the browser router never to drop audio
+                    ]
+                });
+            }
+
+            // 2. Add the Video Track with Low Priority & Degradation Preferences
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+                const videoTransceiver = peerConnection.addTransceiver(videoTrack, {
+                    direction: "sendrecv",
+                    streams: [localStream],
+                    sendEncodings: [
+                        { 
+                            priority: "low",
+                            maxBitrate: 400000 // Hard-caps video upload to ~400kbps (Prevents choking)
+                        }
+                    ]
+                });
+
+                // Tells WebRTC: If the network chokes, lower the image resolution, but KEEP the audio and video moving smoothly
+                const sender = videoTransceiver.sender;
+                const parameters = sender.getParameters();
+                parameters.degradationPreference = "maintain-framerate";
+                sender.setParameters(parameters).catch(err => console.error("Degradation error:", err));
+            }
 
             peerConnection.ontrack = (event) => {
                 if (!remoteVideo.srcObject) {
