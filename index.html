@@ -3,40 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Meeting via Secret Key</title>
     <link rel="icon" href="data:,">
-    <title>Serverless P2P Video Call</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #202124; color: white; margin: 0; padding: 20px; }
-        .video-container { display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap; justify-content: center; }
-        video { width: 45vw; max-width: 500px; min-width: 300px; height: 350px; background: #000; border-radius: 8px; transform: scaleX(-1); object-fit: cover; }
+        .setup-panel { background: #303134; padding: 20px; border-radius: 8px; margin-bottom: 20px; width: 100%; max-width: 500px; box-sizing: border-box; }
+        .input-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+        input { padding: 12px; border-radius: 4px; border: 1px solid #5f6368; background: #202124; color: white; font-size: 16px; }
+        .btn-group { display: flex; gap: 10px; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px; color: white; transition: background 0.2s; }
+        .btn-start { background: #1a73e8; }
+        .btn-start:hover { background: #1557b0; }
+        .btn-join { background: #12b886; }
+        .btn-join:hover { background: #0ca678; }
+        .controls-row { display: flex; gap: 15px; margin-top: 20px; justify-content: center; width: 100%; }
+        .btn-control { max-width: 160px; font-size: 13px; }
+        #muteBtn { background: #ea4335; }
+        #camBtn { background: #1a73e8; }
+        
+        .status-bar { margin: 10px 0; font-size: 14px; color: #aecbfa; font-weight: bold; }
+        .video-container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
+        .video-box { position: relative; }
+        video { width: 45vw; max-width: 480px; min-width: 280px; height: 320px; background: #000; border-radius: 8px; transform: scaleX(-1); object-fit: cover; border: 2px solid #3c4043; }
         #remoteVideo { transform: none; }
-        .controls { margin-top: 20px; display: flex; gap: 10px; }
-        button { padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px; }
-        #startBtn { background: #1a73e8; color: white; }
-        #muteBtn { background: #ea4335; color: white; }
+        .video-label { position: absolute; bottom: 15px; left: 15px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
     </style>
 </head>
 <body>
 
-    <h1>2-Person Serverless Meeting</h1>
+    <h1>Secret Key Video Call</h1>
     
+    <!-- Unified Setup Control Panel -->
+    <div class="setup-panel">
+        <div class="input-group">
+            <label for="roomKey">Enter Shared Secret Key:</label>
+            <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
+        </div>
+        <div class="btn-group">
+            <button id="startBtn" class="btn-start">Start a New Call</button>
+            <button id="joinBtn" class="btn-join">Join Existing Call</button>
+        </div>
+    </div>
+
+    <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
+
     <div class="video-container">
-        <div>
-            <h3>Local (You)</h3>
+        <div class="video-box">
             <video id="localVideo" autoplay playsinline muted></video>
+            <div class="video-label">You (Local)</div>
         </div>
-        <div>
-            <h3>Remote (Friend)</h3>
+        <div class="video-box">
             <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-label">Friend (Remote)</div>
         </div>
     </div>
 
-    <div class="controls">
-        <button id="startBtn">Start Call</button>
-        <button id="muteBtn" data-muted="false">Mute Audio</button>
+    <!-- Media Controls Row -->
+    <div class="controls-row">
+        <button id="muteBtn" class="btn-control" data-muted="false">Mute Audio</button>
+        <button id="camBtn" class="btn-control" data-off="false">Turn Camera Off</button>
     </div>
 
-    <!-- Firebase JS SDK Modules -->
+    <!-- Offline-Safe Script Routing -->
     <script type="module">
         //*
         import { initializeApp } from "https://gstatic.com";
@@ -46,7 +74,7 @@
         import { getDatabase, ref, set, onChildAdded, remove } from "./firebase-database.js";
         //*/
         
-        // Replace with your actual Firebase project configuration
+        // Replace with your actual Firebase project configuration parameters here
         const firebaseConfig = {
             apiKey: "AIzaSyB2F_QfZFAwitJrFEcvCTadOsLOVETkRpg",
             authDomain: "p2p-meeting-c4e09.firebaseapp.com",
@@ -56,39 +84,40 @@
             messagingSenderId: "977559758143",
             appId: "1:977559758143:web:014c42c579988a25555f8a"
         };
-  
-        // Initialize Firebase
+
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
-        const signalRef = ref(db, 'signaling');
 
         let localStream;
         let peerConnection;
+        let activeRoomName = null;
 
         const rtcConfig = {
-            iceServers: [{ urls: 'stun:://google.com' }, { urls: 'stun:://google.com' }]
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
         };
 
+        const roomKeyInput = document.getElementById('roomKey');
+        const startBtn = document.getElementById('startBtn');
+        const joinBtn = document.getElementById('joinBtn');
+        const muteBtn = document.getElementById('muteBtn');
+        const camBtn = document.getElementById('camBtn');
+        const statusText = document.getElementById('statusText');
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
-        const startBtn = document.getElementById('startBtn');
-        const muteBtn = document.getElementById('muteBtn');
 
-        // Step 1: Capture camera & microphone immediately
+        // Step 1: Open Local Hardware Feed
         async function init() {
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 localVideo.srcObject = localStream;
-                // Clear any leftover database signaling data from previous calls
-                await remove(signalRef);
             } catch (err) {
-                console.error("Camera access denied:", err);
-                alert("Camera and microphone access are required.");
+                statusText.innerText = "Error: System camera/microphone access denied.";
+                console.error(err);
             }
         }
 
-        // Step 2: Establish the WebRTC Connection
-        function createPeerConnection() {
+        // Step 2: Build WebRTC Engine Isolated Inside the Secret Room Node
+        function createPeerConnection(roomName) {
             peerConnection = new RTCPeerConnection(rtcConfig);
 
             localStream.getTracks().forEach(track => {
@@ -98,76 +127,136 @@
             peerConnection.ontrack = (event) => {
                 if (!remoteVideo.srcObject) {
                     remoteVideo.srcObject = event.streams[0];
+                    statusText.innerText = "Connected! Peer media stream verified.";
                 }
             };
 
-            // Write generated ICE candidates to Firebase database
+            // Write local network candidates straight to Firebase
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    const newCandidateRef = ref(db, `signaling/candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`);
-                    set(newCandidateRef, { candidate: event.candidate.toJSON() });
+                    const candidateId = `candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+                    const candRef = ref(db, `rooms/${roomName}/${candidateId}`);
+                    set(candRef, { candidate: event.candidate.toJSON() });
                 }
             };
         }
 
-        // Step 3: Peer A pushes "Call Offer" to Firebase
+        // Alphanumeric character validator
+        function getValidatedKey() {
+            const key = roomKeyInput.value.trim().replace(/[^a-zA-Z0-9-_]/g, '');
+            if (!key) {
+                alert("Please enter a valid alphanumeric key.");
+                return null;
+            }
+            return key;
+        }
+
+        // Action A: Host starts the call session
         startBtn.addEventListener('click', async () => {
+            const roomName = getValidatedKey();
+            if (!roomName) return;
+
             startBtn.disabled = true;
-            startBtn.innerText = "Connecting...";
-            createPeerConnection();
-            
+            joinBtn.disabled = true;
+            activeRoomName = roomName;
+            statusText.innerText = `Initializing room "${roomName}"...`;
+
+            // Flush out lingering historical database records for a fresh connection
+            const roomRef = ref(db, `rooms/${roomName}`);
+            await remove(roomRef);
+
+            createPeerConnection(roomName);
+
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
-            
-            // Save local SDP to Firebase
-            const sdpRef = ref(db, 'signaling/sdp');
+
+            // Write the local connection configurations to the secret database cluster
+            const sdpRef = ref(db, `rooms/${roomName}/sdp`);
             await set(sdpRef, { sdp: { type: offer.type, sdp: offer.sdp } });
+
+            statusText.innerText = `Room "${roomName}" created. Waiting for friend to join...`;
+            listenToRoom(roomName);
         });
 
-        // Step 4: Listen to Firebase for updates
-        onChildAdded(signalRef, async (snapshot) => {
-            const data = snapshot.val();
-            if (!data) return;
+        // Action B: Client joins the call session
+        joinBtn.addEventListener('click', () => {
+            const roomName = getValidatedKey();
+            if (!roomName) return;
 
-            if (!peerConnection) {
-                createPeerConnection();
-            }
+            startBtn.disabled = true;
+            joinBtn.disabled = true;
+            activeRoomName = roomName;
+            statusText.innerText = `Connecting to room "${roomName}"...`;
 
-            // Process incoming session configurations (SDP Offers / Answers)
-            if (data.sdp) {
-                // Skip if it matches our own description to avoid infinite loops
-                if (peerConnection.localDescription && peerConnection.localDescription.sdp === data.sdp.sdp) return;
-
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
-                
-                // If Peer B receives an offer, auto-generate and push back an Answer
-                if (data.sdp.type === 'offer') {
-                    const answer = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answer);
-                    
-                    const sdpRef = ref(db, 'signaling/sdp');
-                    await set(sdpRef, { sdp: { type: answer.type, sdp: answer.sdp } });
-                }
-            } 
-            // Process incoming ICE network paths
-            else if (data.candidate) {
-                try {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-                } catch (e) {
-                    console.error("Error adding network candidate:", e);
-                }
-            }
+            createPeerConnection(roomName);
+            listenToRoom(roomName);
         });
 
-        // Audio controls
+        // Step 3: Event Sync Engine mapped to the shared room tree
+        function listenToRoom(roomName) {
+            const targetRef = ref(db, `rooms/${roomName}`);
+            
+            onChildAdded(targetRef, async (snapshot) => {
+                const data = snapshot.val();
+                if (!data) return;
+
+                if (data.sdp) {
+                    // Stop configurations looping if it matches what we sent
+                    if (peerConnection.localDescription && peerConnection.localDescription.sdp === data.sdp.sdp) return;
+
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+
+                    // If a client receives an offer packet, automatically synthesize an answer response
+                    if (data.sdp.type === 'offer') {
+                        statusText.innerText = "Processing call invitation...";
+                        const answer = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answer);
+
+                        const sdpRef = ref(db, `rooms/${roomName}/sdp`);
+                        await set(sdpRef, { sdp: { type: answer.type, sdp: answer.sdp } });
+                        statusText.innerText = "Answer transmitted. Syncing streams...";
+                    }
+                } 
+                else if (data.candidate) {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    } catch (e) {
+                        console.warn("ICE candidate skipped:", e);
+                    }
+                }
+            });
+        }
+
+        // Hardware Controls: Audio Mute Switch
         muteBtn.addEventListener('click', () => {
-            const audioTrack = localStream.getAudioTracks()[0];
-            if (audioTrack) {
+            const audioTracks = localStream.getAudioTracks();
+            if (audioTracks.length > 0) {
                 const isMuted = muteBtn.getAttribute('data-muted') === 'true';
-                audioTrack.enabled = isMuted;
+                audioTracks[0].enabled = isMuted; // Toggle transmission states
                 muteBtn.setAttribute('data-muted', !isMuted);
                 muteBtn.innerText = isMuted ? "Mute Audio" : "Unmute Audio";
                 muteBtn.style.background = isMuted ? "#ea4335" : "#34a853";
+            }
+        });
+
+        // Hardware Controls: Camera On/Off Toggle
+        camBtn.addEventListener('click', () => {
+            const videoTracks = localStream.getVideoTracks();
+            if (videoTracks.length > 0) {
+                const isCamOff = camBtn.getAttribute('data-off') === 'true';
+                videoTracks[0].enabled = isCamOff; // Toggle transmission states
+                camBtn.setAttribute('data-off', !isCamOff);
+                camBtn.innerText = isCamOff ? "Turn Camera Off" : "Turn Camera On";
+                camBtn.style.background = isCamOff ? "#1a73e8" : "#ea4335";
+            }
+        });
+
+        // Step 4: Automatic Room Clean-up Execution
+        // Triggers instantly when a participant exits the page or closes the browser tab
+        window.addEventListener('beforeunload', () => {
+            if (activeRoomName) {
+                const roomRef = ref(db, `rooms/${activeRoomName}`);
+                remove(roomRef);
             }
         });
 
