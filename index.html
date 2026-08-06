@@ -180,6 +180,42 @@
             }
         }
 
+        async function updatePeerStats(reason = 'stats update') {
+            if (!peerConnection) {
+                updateDiagnostics(reason);
+                return;
+            }
+
+            try {
+                const stats = await peerConnection.getStats();
+                let selectedPair = null;
+                let inboundVideo = null;
+                let inboundAudio = null;
+
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' && report.selected) {
+                        selectedPair = report;
+                    } else if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        inboundVideo = report;
+                    } else if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                        inboundAudio = report;
+                    }
+                });
+
+                diagnosticsText.textContent = [
+                    diagnosticsText.textContent,
+                    '',
+                    `stats reason: ${reason}`,
+                    `selected pair: ${selectedPair ? `${selectedPair.localCandidateId || 'n/a'} -> ${selectedPair.remoteCandidateId || 'n/a'}, state=${selectedPair.state || 'n/a'}, nominated=${selectedPair.nominated || false}, bytesSent=${selectedPair.bytesSent || 0}, bytesReceived=${selectedPair.bytesReceived || 0}` : 'none'}`,
+                    `inbound video: ${inboundVideo ? `packetsReceived=${inboundVideo.packetsReceived || 0}, packetsLost=${inboundVideo.packetsLost || 0}, framesReceived=${inboundVideo.framesReceived || 0}, framesDecoded=${inboundVideo.framesDecoded || 0}, bytesReceived=${inboundVideo.bytesReceived || 0}` : 'none'}`,
+                    `inbound audio: ${inboundAudio ? `packetsReceived=${inboundAudio.packetsReceived || 0}, packetsLost=${inboundAudio.packetsLost || 0}, bytesReceived=${inboundAudio.bytesReceived || 0}` : 'none'}`
+                ].join('\n');
+            } catch (err) {
+                console.warn('Failed to read peer stats:', err);
+                updateDiagnostics(`${reason} (stats unavailable)`);
+            }
+        }
+
         function setCallButtonsEnabled(enabled) {
             startBtn.disabled = !enabled;
             joinBtn.disabled = !enabled;
@@ -373,8 +409,8 @@
                 const audioSender = peerConnection.addTrack(audioTrack, localStream);
                 const audioParameters = audioSender.getParameters();
                 audioParameters.encodings = audioParameters.encodings && audioParameters.encodings.length > 0
-                    ? audioParameters.encodings.map(encoding => ({ ...encoding, priority: 'high' }))
-                    : [{ priority: 'high' }];
+                    ? audioParameters.encodings.map(encoding => ({ ...encoding }))
+                    : [{}];
                 audioSender.setParameters(audioParameters).catch(err => console.error('Audio sender parameter error:', err));
             }
 
@@ -382,8 +418,8 @@
                 const videoSender = peerConnection.addTrack(videoTrack, localStream);
                 const videoParameters = videoSender.getParameters();
                 videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
-                    ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'low', maxBitrate: 400000 }))
-                    : [{ priority: 'low', maxBitrate: 400000 }];
+                    ? videoParameters.encodings.map(encoding => ({ ...encoding, maxBitrate: 400000 }))
+                    : [{ maxBitrate: 400000 }];
                 videoParameters.degradationPreference = 'maintain-framerate';
                 videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
             }
@@ -428,6 +464,7 @@
                     clearJoinTimeout();
                     statusText.innerText = 'Connected! Peer connection established.';
                     updateDiagnostics('peer connection connected');
+                    updatePeerStats('peer connection connected');
                     return;
                 }
 
@@ -437,9 +474,11 @@
                 }
 
                 updateDiagnostics(`connection state changed to ${peerConnection.connectionState}`);
+                updatePeerStats(`connection state changed to ${peerConnection.connectionState}`);
             };
 
             updateDiagnostics('peer connection created');
+            updatePeerStats('peer connection created');
         }
 
         // Alphanumeric character validator
