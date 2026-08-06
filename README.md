@@ -10,7 +10,7 @@ Available [here](https://hnikolov.github.io/p2p-meeting)
 *   **Shared Secret Rooms:** Enter an agreed-upon passphrase (e.g., `hristo-room`) to connect securely without sharing complex URL paths.
 *   **Audio-First Bandwidth Optimization:** Automatically hard-caps video bandwidth (~400kbps) and sets audio streams to high network priority (`high`). If your connection drops, video quality degrades gracefully so audio never stutters.
 *   **Hot-Swappable Hardware Selectors:** Switch between multiple microphones or webcams mid-call instantly without dropping the connection.
-*   **Automatic Cleanup:** Each participant clears their own signaling records automatically via browser lifecycle triggers (`beforeunload` and `pagehide`) when they leave the page.
+*   **Automatic Cleanup:** Each participant clears their own signaling records automatically via browser lifecycle triggers (`beforeunload`) when they leave the page.
 
 ---
 
@@ -72,6 +72,14 @@ Then navigate your browser to `http://localhost:8000`.
 ### ⚠️ Corporate Network Note
 Corporate networks and proxies often intercept outbound CDN scripts (`gstatic.com`) or block streaming UDP traffic entirely. For development on work laptops, make sure you download `firebase-app.js` and `firebase-database.js` locally to your root folder as configured in the scripts. For testing the actual call connection, ensure both devices are connected to less restrictive consumer/home networks.
 
+### ⚠️ Known Issue: Some Phone Connections
+Laptop-to-laptop browser sessions are currently stable and fully functional. Some laptop-to-phone and phone-to-phone sessions can fail during ICE negotiation (for example: selected pair remains unavailable and media packet counters stay at zero), which results in no remote media and eventual call failure.
+
+This appears to depend on mobile network/NAT behavior and relay reachability rather than the room signaling flow itself. If you must test mobile interoperability, prefer:
+1. Devices on the same Wi-Fi network.
+2. A dedicated, production-grade TURN service with your own credentials.
+3. Browser versions with WebRTC support fully up to date.
+
 ---
 
 ## 📞 How to Start a Call
@@ -79,6 +87,7 @@ Corporate networks and proxies often intercept outbound CDN scripts (`gstatic.co
 1. Both users open the live GitHub Pages deployment link.
 2. Grant camera and microphone permissions when prompted by your browser.
 3. Agree on a custom key (e.g., `our-private-room`).
-4. **User 1 (Host):** Type the key into the input box and click **Start a New Call**.
-5. **User 2:** Type the *exact same* key into their box and click **Join Existing Call**.
-6. The browsers will exchange tokens over Firebase and initialize the direct streaming connection immediately.
+4. **User 1 (Host):** Type the key into the input box and click **Call**.
+5. **User 2:** Type the *exact same* key into their box and click **Call**.
+6. The app auto-detects whether to create a new room or join the existing one for that key.
+7. The same button toggles to **Disconnect** while connected or connecting. Click it to leave and return to **Call** mode.

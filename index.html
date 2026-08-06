@@ -12,20 +12,16 @@
         input { padding: 12px; border-radius: 4px; border: 1px solid #5f6368; background: #202124; color: white; font-size: 16px; }
         .btn-group { display: flex; gap: 10px; }
         button { flex: 1; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px; color: white; transition: background 0.2s; }
-        .btn-start { background: #1a73e8; }
-        .btn-start:hover { background: #1557b0; }
-        .btn-join { background: #12b886; }
-        .btn-join:hover { background: #0ca678; }
+        .btn-call { background: #1a73e8; }
+        .btn-call:hover { background: #1557b0; }
+        .btn-call-disconnect { background: #fbbc04; color: #202124; }
+        .btn-call-disconnect:hover { background: #f9ab00; }
         .controls-row { display: flex; gap: 15px; margin-top: 20px; justify-content: center; width: 100%; }
         .btn-control { max-width: 160px; font-size: 13px; }
         #muteBtn { background: #ea4335; }
         #camBtn { background: #1a73e8; }
         
         .status-bar { margin: 10px 0; font-size: 14px; color: #aecbfa; font-weight: bold; }
-        .diagnostics-panel { width: 100%; max-width: 980px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid #3c4043; border-radius: 8px; background: #151618; color: #d2e3fc; box-sizing: border-box; }
-        .diagnostics-panel summary { cursor: pointer; font-weight: bold; color: #8ab4f8; }
-        .diagnostics-panel pre { margin: 10px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; }
-        .diagnostics-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid #2d3135; }
         .video-container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
         .video-box { position: relative; }
         video { width: 45vw; max-width: 480px; min-width: 280px; height: 320px; background: #000; border-radius: 8px; transform: scaleX(-1); object-fit: cover; border: 2px solid #3c4043; }
@@ -35,7 +31,7 @@
 </head>
 <body>
 
-    <h1>P2P Serverless Meeting</h1>
+    <h1>P2P Serverless Meeting v0.1</h1>
     
     <!-- Unified Setup Control Panel -->
     <div class="setup-panel">
@@ -44,20 +40,11 @@
             <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
         </div>
         <div class="btn-group">
-            <button id="startBtn" class="btn-start">Start a New Call</button>
-            <button id="joinBtn" class="btn-join">Join Existing Call</button>
+            <button id="callBtn" class="btn-call">Call</button>
         </div>
     </div>
 
     <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
-
-    <details class="diagnostics-panel">
-        <summary>Diagnostics</summary>
-        <pre id="diagnosticsStateText">Waiting for local media...</pre>
-        <div class="diagnostics-section">
-            <pre id="diagnosticsStatsText">Waiting for peer stats...</pre>
-        </div>
-    </details>
 
     <div class="input-group">
         <label for="audioSource">Microphone:</label>
@@ -88,7 +75,7 @@
     <!-- Offline-Safe Script Routing -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-        import { getDatabase, ref, set, onChildAdded, onValue, remove } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
+        import { getDatabase, get, ref, runTransaction, set, onChildAdded, onValue, remove } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
         
         // Replace with your actual Firebase project configuration parameters here
         const firebaseConfig = {
@@ -109,10 +96,11 @@
         let peerConnection;
         let activeRoomName = null;
         let localParticipantRole = null;
+        let activeSessionId = null;
+        let remotePresenceSeen = false;
         let remoteIceQueue = [];
         let signalingUnsubscribers = [];
         let joinTimeoutId = null;
-        let statsPollId = null;
 
         const rtcConfig = {
             iceServers: [
@@ -128,128 +116,54 @@
         };
 
         const roomKeyInput = document.getElementById('roomKey');
-        const startBtn = document.getElementById('startBtn');
-        const joinBtn = document.getElementById('joinBtn');
+        const callBtn = document.getElementById('callBtn');
         const muteBtn = document.getElementById('muteBtn');
         const camBtn = document.getElementById('camBtn');
         const statusText = document.getElementById('statusText');
-        const diagnosticsStateText = document.getElementById('diagnosticsStateText');
-        const diagnosticsStatsText = document.getElementById('diagnosticsStatsText');
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
         const audioSource = document.getElementById('audioSource');
         const videoSource = document.getElementById('videoSource');
 
-        function describeTrack(track) {
-            if (!track) return 'none';
-
-            return [
-                `kind=${track.kind}`,
-                `id=${track.id}`,
-                `enabled=${track.enabled}`,
-                `muted=${track.muted}`,
-                `readyState=${track.readyState}`
-            ].join(', ');
-        }
-
-        function updateDiagnostics(reason = 'state update') {
-            const senders = peerConnection ? peerConnection.getSenders() : [];
-            const receivers = peerConnection ? peerConnection.getReceivers() : [];
-            const localAudioTrack = localStream ? localStream.getAudioTracks()[0] : null;
-            const localVideoTrack = localStream ? localStream.getVideoTracks()[0] : null;
-            const remoteTracks = remoteStream ? remoteStream.getTracks() : [];
-            const receiverTracks = receivers.map(receiver => receiver.track).filter(Boolean);
-
-            diagnosticsStateText.textContent = [
-                `reason: ${reason}`,
-                `role: ${localParticipantRole || 'none'}`,
-                `room: ${activeRoomName || 'none'}`,
-                `connectionState: ${peerConnection ? peerConnection.connectionState : 'none'}`,
-                `signalingState: ${peerConnection ? peerConnection.signalingState : 'none'}`,
-                `iceConnectionState: ${peerConnection ? peerConnection.iceConnectionState : 'none'}`,
-                `local audio: ${describeTrack(localAudioTrack)}`,
-                `local video: ${describeTrack(localVideoTrack)}`,
-                `remote stream tracks: ${remoteTracks.length ? remoteTracks.map(describeTrack).join(' | ') : 'none'}`,
-                `receiver tracks: ${receiverTracks.length ? receiverTracks.map(describeTrack).join(' | ') : 'none'}`,
-                `sender tracks: ${senders.length ? senders.map(sender => describeTrack(sender.track)).join(' | ') : 'none'}`,
-                `queued ICE candidates: ${remoteIceQueue.length}`,
-                `local video readyState: ${localVideo.readyState}`,
-                `remote video readyState: ${remoteVideo.readyState}`
-            ].join('\n');
+        function updateDiagnostics() {
+            // Diagnostics overlay removed after debugging cleanup.
         }
 
         function tryPlayRemoteVideo(reason = 'remote media update') {
             const playPromise = remoteVideo.play();
             if (playPromise && typeof playPromise.catch === 'function') {
                 playPromise.catch(err => {
+                    if (err && err.name === 'AbortError') {
+                        return;
+                    }
+
                     console.warn('Remote video playback blocked:', err);
                     updateDiagnostics(`${reason} (remote play blocked)`);
                 });
             }
         }
 
-        async function updatePeerStats(reason = 'stats update') {
-            if (!peerConnection) {
-                updateDiagnostics(reason);
-                return;
-            }
-
-            try {
-                const stats = await peerConnection.getStats();
-                let selectedPair = null;
-                let inboundVideo = null;
-                let inboundAudio = null;
-                let outboundVideo = null;
-                let outboundAudio = null;
-
-                stats.forEach(report => {
-                    if (report.type === 'candidate-pair' && (report.selected || (report.nominated && report.state === 'succeeded'))) {
-                        selectedPair = report;
-                    } else if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                        inboundVideo = report;
-                    } else if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-                        inboundAudio = report;
-                    } else if (report.type === 'outbound-rtp' && report.kind === 'video') {
-                        outboundVideo = report;
-                    } else if (report.type === 'outbound-rtp' && report.kind === 'audio') {
-                        outboundAudio = report;
-                    }
-                });
-
-                diagnosticsStatsText.textContent = [
-                    `stats reason: ${reason}`,
-                    `selected pair: ${selectedPair ? `${selectedPair.localCandidateId || 'n/a'} -> ${selectedPair.remoteCandidateId || 'n/a'}, state=${selectedPair.state || 'n/a'}, nominated=${selectedPair.nominated || false}, bytesSent=${selectedPair.bytesSent || 0}, bytesReceived=${selectedPair.bytesReceived || 0}` : 'none'}`,
-                    `inbound video: ${inboundVideo ? `packetsReceived=${inboundVideo.packetsReceived || 0}, packetsLost=${inboundVideo.packetsLost || 0}, framesReceived=${inboundVideo.framesReceived || 0}, framesDecoded=${inboundVideo.framesDecoded || 0}, bytesReceived=${inboundVideo.bytesReceived || 0}` : 'none'}`,
-                    `inbound audio: ${inboundAudio ? `packetsReceived=${inboundAudio.packetsReceived || 0}, packetsLost=${inboundAudio.packetsLost || 0}, bytesReceived=${inboundAudio.bytesReceived || 0}` : 'none'}`,
-                    `outbound video: ${outboundVideo ? `packetsSent=${outboundVideo.packetsSent || 0}, bytesSent=${outboundVideo.bytesSent || 0}, framesEncoded=${outboundVideo.framesEncoded || 0}` : 'none'}`,
-                    `outbound audio: ${outboundAudio ? `packetsSent=${outboundAudio.packetsSent || 0}, bytesSent=${outboundAudio.bytesSent || 0}` : 'none'}`
-                ].join('\n');
-            } catch (err) {
-                console.warn('Failed to read peer stats:', err);
-                diagnosticsStatsText.textContent = `${reason} (stats unavailable)`;
-            }
+        function updatePeerStats() {
+            // Stats polling removed after debugging cleanup.
         }
 
         function startStatsPolling() {
-            if (statsPollId) return;
-
-            statsPollId = setInterval(() => {
-                if (peerConnection) {
-                    updatePeerStats('poll');
-                }
-            }, 2000);
+            // Stats polling removed after debugging cleanup.
         }
 
         function stopStatsPolling() {
-            if (!statsPollId) return;
-
-            clearInterval(statsPollId);
-            statsPollId = null;
+            // Stats polling removed after debugging cleanup.
         }
 
         function setCallButtonsEnabled(enabled) {
-            startBtn.disabled = !enabled;
-            joinBtn.disabled = !enabled;
+            callBtn.disabled = !enabled;
+        }
+
+        function syncCallButtonMode() {
+            const isConnectedOrConnecting = Boolean(activeRoomName);
+
+            callBtn.innerText = isConnectedOrConnecting ? 'Disconnect' : 'Call';
+            callBtn.classList.toggle('btn-call-disconnect', isConnectedOrConnecting);
         }
 
         function setDeviceControlsEnabled(enabled) {
@@ -257,6 +171,85 @@
             videoSource.disabled = !enabled;
             muteBtn.disabled = !enabled;
             camBtn.disabled = !enabled;
+        }
+
+        function createSessionId() {
+            return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        }
+
+        function getRemoteParticipantRole() {
+            if (localParticipantRole === 'caller') return 'callee';
+            if (localParticipantRole === 'callee') return 'caller';
+            return null;
+        }
+
+        async function publishOwnPresence(roomName) {
+            if (!roomName || !localParticipantRole || !activeSessionId) return;
+
+            const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
+            await set(ownPresenceRef, {
+                sessionId: activeSessionId,
+                updatedAt: Date.now()
+            });
+        }
+
+        async function claimRoleSlot(roomName, role, sessionId) {
+            const slotRef = ref(db, `rooms/${roomName}/participants/${role}`);
+            const claimResult = await runTransaction(slotRef, currentValue => {
+                if (!currentValue || !currentValue.sessionId || currentValue.sessionId === sessionId) {
+                    return {
+                        sessionId,
+                        updatedAt: Date.now()
+                    };
+                }
+
+                return;
+            }, { applyLocally: false });
+
+            return claimResult.committed;
+        }
+
+        async function evaluateRoomAction(roomName) {
+            const roomSnapshot = await get(ref(db, `rooms/${roomName}`));
+            if (!roomSnapshot.exists()) {
+                return { mode: 'start' };
+            }
+
+            const roomData = roomSnapshot.val() || {};
+            const offerData = roomData.offer || null;
+            const participantsData = roomData.participants || {};
+            const callerPresence = participantsData.caller || null;
+            const calleePresence = participantsData.callee || null;
+
+            const hasJoinableOffer = Boolean(
+                offerData &&
+                offerData.sdp &&
+                offerData.sdp.type === 'offer' &&
+                offerData.sessionId
+            );
+
+            if (hasJoinableOffer) {
+                if (calleePresence && calleePresence.sessionId && calleePresence.sessionId === offerData.sessionId) {
+                    return {
+                        mode: 'full',
+                        message: 'Room is already occupied by two participants.'
+                    };
+                }
+
+                return {
+                    mode: 'join',
+                    offerSessionId: offerData.sessionId
+                };
+            }
+
+            if ((callerPresence && callerPresence.sessionId) || (calleePresence && calleePresence.sessionId)) {
+                return {
+                    mode: 'busy',
+                    message: 'Room is in transition. Ask both peers to disconnect and retry.'
+                };
+            }
+
+            return { mode: 'start' };
         }
 
         function clearJoinTimeout() {
@@ -292,11 +285,13 @@
             const cleanupTasks = localParticipantRole === 'caller'
                 ? [
                     remove(ref(db, `${roomBasePath}/offer`)),
-                    remove(ref(db, `${roomBasePath}/callerCandidates`))
+                    remove(ref(db, `${roomBasePath}/callerCandidates`)),
+                    remove(ref(db, `${roomBasePath}/participants/caller`))
                 ]
                 : [
                     remove(ref(db, `${roomBasePath}/answer`)),
-                    remove(ref(db, `${roomBasePath}/calleeCandidates`))
+                    remove(ref(db, `${roomBasePath}/calleeCandidates`)),
+                    remove(ref(db, `${roomBasePath}/participants/callee`))
                 ];
 
             await Promise.allSettled(cleanupTasks);
@@ -310,7 +305,10 @@
             await cleanupRoomArtifacts();
             activeRoomName = null;
             localParticipantRole = null;
+            activeSessionId = null;
+            remotePresenceSeen = false;
             setCallButtonsEnabled(Boolean(localStream));
+            syncCallButtonMode();
             updateDiagnostics('call session reset');
 
             if (statusMessage) {
@@ -354,6 +352,7 @@
         }
 
         setCallButtonsEnabled(false);
+        syncCallButtonMode();
         setDeviceControlsEnabled(false);
 
         async function discoverDevices() {
@@ -409,11 +408,13 @@
                 // Scan the available hardware and populate your dropdown menus
                 await discoverDevices();
                 setCallButtonsEnabled(true);
+                syncCallButtonMode();
                 statusText.innerText = "Camera active. Enter a key above to connect.";
                 updateDiagnostics('local media ready');
             } catch (err) {
                 statusText.innerText = "Error: System camera/microphone access denied.";
                 setCallButtonsEnabled(false);
+                syncCallButtonMode();
                 setDeviceControlsEnabled(false);
                 console.error(err);
                 updateDiagnostics('local media failed');
@@ -439,11 +440,22 @@
             const videoTrack = localStream.getVideoTracks()[0];
 
             if (audioTrack) {
-                peerConnection.addTrack(audioTrack, localStream);
+                const audioSender = peerConnection.addTrack(audioTrack, localStream);
+                const audioParameters = audioSender.getParameters();
+                audioParameters.encodings = audioParameters.encodings && audioParameters.encodings.length > 0
+                    ? audioParameters.encodings.map(encoding => ({ ...encoding, priority: 'high' }))
+                    : [{ priority: 'high' }];
+                audioSender.setParameters(audioParameters).catch(err => console.error('Audio sender parameter error:', err));
             }
 
             if (videoTrack) {
-                peerConnection.addTrack(videoTrack, localStream);
+                const videoSender = peerConnection.addTrack(videoTrack, localStream);
+                const videoParameters = videoSender.getParameters();
+                videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
+                    ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'low', maxBitrate: 400000 }))
+                    : [{ priority: 'low', maxBitrate: 400000 }];
+                videoParameters.degradationPreference = 'maintain-framerate';
+                videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
             }
 
             peerConnection.ontrack = (event) => {
@@ -476,7 +488,10 @@
                     const candidateId = `candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
                     const candidateGroup = localParticipantRole === 'caller' ? 'callerCandidates' : 'calleeCandidates';
                     const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
-                    set(candRef, { candidate: event.candidate.toJSON() })
+                    set(candRef, {
+                        sessionId: activeSessionId,
+                        candidate: event.candidate.toJSON()
+                    })
                         .then(() => updateDiagnostics('local ICE candidate emitted'))
                         .catch(err => {
                             console.error('Failed to publish ICE candidate:', err);
@@ -529,22 +544,30 @@
             return key;
         }
 
-        // Action A: Host starts the call session
-        startBtn.addEventListener('click', async () => {
+        async function beginStartRoom(roomName) {
             if (!ensureLocalStreamReady()) return;
 
-            const roomName = getValidatedKey();
-            if (!roomName) return;
-
-            setCallButtonsEnabled(false);
             activeRoomName = roomName;
             localParticipantRole = 'caller';
+            activeSessionId = createSessionId();
+            remotePresenceSeen = false;
+            syncCallButtonMode();
             statusText.innerText = `Initializing room "${roomName}"...`;
 
             try {
-                // Flush out lingering historical database records for a fresh connection
-                const roomRef = ref(db, `rooms/${roomName}`);
-                await remove(roomRef);
+                const callerSlotClaimed = await claimRoleSlot(roomName, 'caller', activeSessionId);
+                if (!callerSlotClaimed) {
+                    await resetCallSession('Room is already occupied by another active caller.');
+                    return;
+                }
+
+                // Flush stale signaling artifacts without removing the whole room container.
+                await Promise.allSettled([
+                    remove(ref(db, `rooms/${roomName}/offer`)),
+                    remove(ref(db, `rooms/${roomName}/answer`)),
+                    remove(ref(db, `rooms/${roomName}/callerCandidates`)),
+                    remove(ref(db, `rooms/${roomName}/calleeCandidates`))
+                ]);
 
                 createPeerConnection(roomName);
                 listenToRoom(roomName);
@@ -555,26 +578,33 @@
 
                 // Write the local connection configurations to the secret database cluster
                 const offerRef = ref(db, `rooms/${roomName}/offer`);
-                await set(offerRef, { sdp: { type: offer.type, sdp: offer.sdp } });
+                await set(offerRef, {
+                    sessionId: activeSessionId,
+                    sdp: { type: offer.type, sdp: offer.sdp }
+                });
+
+                await publishOwnPresence(roomName);
 
                 statusText.innerText = `Room "${roomName}" created. Waiting for friend to join...`;
             } catch (err) {
                 console.error('Failed to start room:', err);
                 await resetCallSession('Could not create the room. Check Firebase connectivity and try again.');
             }
-        });
+        }
 
-        // Action B: Client joins the call session
-        joinBtn.addEventListener('click', async () => {
+        async function beginJoinRoom(roomName, autoDetected = false) {
             if (!ensureLocalStreamReady()) return;
 
-            const roomName = getValidatedKey();
-            if (!roomName) return;
-
-            setCallButtonsEnabled(false);
             activeRoomName = roomName;
             localParticipantRole = 'callee';
+            activeSessionId = null;
+            remotePresenceSeen = false;
+            syncCallButtonMode();
             statusText.innerText = `Connecting to room "${roomName}"...`;
+
+            if (autoDetected) {
+                statusText.innerText = `Room "${roomName}" already exists. Joining it...`;
+            }
 
             try {
                 createPeerConnection(roomName);
@@ -590,6 +620,36 @@
                 console.error('Failed to join room:', err);
                 await resetCallSession('Could not join the room. Check the shared key and try again.');
             }
+        }
+
+        // Unified Action: Auto Start or Join based on room state
+        callBtn.addEventListener('click', async () => {
+            if (activeRoomName) {
+                await resetCallSession('Disconnected. Enter a key above to call again.');
+                return;
+            }
+
+            const roomName = getValidatedKey();
+            if (!roomName) return;
+
+            try {
+                const decision = await evaluateRoomAction(roomName);
+
+                if (decision.mode === 'full' || decision.mode === 'busy') {
+                    statusText.innerText = decision.message;
+                    return;
+                }
+
+                if (decision.mode === 'join') {
+                    await beginJoinRoom(roomName, true);
+                    return;
+                }
+
+                await beginStartRoom(roomName);
+            } catch (err) {
+                console.error('Room evaluation failed:', err);
+                statusText.innerText = 'Could not evaluate room state. Try again.';
+            }
         });
 
         // Step 3: Event Sync Engine mapped to the shared room tree
@@ -602,12 +662,40 @@
             const remoteCandidatesPath = localParticipantRole === 'caller'
                 ? `rooms/${roomName}/calleeCandidates`
                 : `rooms/${roomName}/callerCandidates`;
+            const remotePresenceRole = getRemoteParticipantRole();
+            const remotePresencePath = `rooms/${roomName}/participants/${remotePresenceRole}`;
 
             const unsubscribeSdp = onValue(ref(db, remoteSdpPath), async (snapshot) => {
                 const data = snapshot.val();
                 if (!data || !peerConnection || !data.sdp) return;
 
                 try {
+                    const packetSessionId = data.sessionId || null;
+
+                    if (localParticipantRole === 'caller') {
+                        if (!packetSessionId || packetSessionId !== activeSessionId) {
+                            return;
+                        }
+                    } else if (localParticipantRole === 'callee') {
+                        if (!packetSessionId) {
+                            return;
+                        }
+
+                        if (!activeSessionId) {
+                            activeSessionId = packetSessionId;
+                        } else if (packetSessionId !== activeSessionId) {
+                            // The remote peer restarted the call while this side stayed open.
+                            // Rebuild the peer connection and adopt the new signaling session.
+                            if (data.sdp.type !== 'offer') {
+                                return;
+                            }
+
+                            statusText.innerText = 'Remote peer restarted. Re-establishing call...';
+                            createPeerConnection(roomName);
+                            activeSessionId = packetSessionId;
+                        }
+                    }
+
                     if (peerConnection.remoteDescription && peerConnection.remoteDescription.sdp === data.sdp.sdp) {
                         return;
                     }
@@ -617,6 +705,12 @@
                     updateDiagnostics(`remote ${data.sdp.type} applied`);
 
                     if (data.sdp.type === 'offer' && localParticipantRole === 'callee' && !peerConnection.localDescription) {
+                        const calleeSlotClaimed = await claimRoleSlot(roomName, 'callee', activeSessionId);
+                        if (!calleeSlotClaimed) {
+                            await resetCallSession('Room is already occupied by two participants.');
+                            return;
+                        }
+
                         clearJoinTimeout();
                         statusText.innerText = 'Processing call invitation...';
                         const answer = await peerConnection.createAnswer();
@@ -624,7 +718,10 @@
                         updateDiagnostics('local answer created');
 
                         const answerRef = ref(db, `rooms/${roomName}/answer`);
-                        await set(answerRef, { sdp: { type: answer.type, sdp: answer.sdp } });
+                        await set(answerRef, {
+                            sessionId: activeSessionId,
+                            sdp: { type: answer.type, sdp: answer.sdp }
+                        });
                         statusText.innerText = 'Answer transmitted. Syncing streams...';
                     }
                 } catch (err) {
@@ -637,6 +734,8 @@
                 const data = snapshot.val();
                 if (!data || !data.candidate || !peerConnection) return;
 
+                if (!data.sessionId || !activeSessionId || data.sessionId !== activeSessionId) return;
+
                 try {
                     await addRemoteIceCandidate(data.candidate);
                 } catch (err) {
@@ -644,7 +743,19 @@
                 }
             });
 
-            signalingUnsubscribers.push(unsubscribeSdp, unsubscribeCandidates);
+            const unsubscribeRemotePresence = onValue(ref(db, remotePresencePath), async (snapshot) => {
+                const remotePresence = snapshot.val();
+                if (remotePresence && remotePresence.sessionId === activeSessionId) {
+                    remotePresenceSeen = true;
+                    return;
+                }
+
+                if (remotePresenceSeen) {
+                    await resetCallSession('Remote peer disconnected. You can start or join a new call.');
+                }
+            });
+
+            signalingUnsubscribers.push(unsubscribeSdp, unsubscribeCandidates, unsubscribeRemotePresence);
         }
 
         // Hardware Controls: Audio Mute Switch
