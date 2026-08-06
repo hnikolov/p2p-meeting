@@ -110,7 +110,14 @@
         let joinTimeoutId = null;
 
         const rtcConfig = {
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                // TURN relay fallback is critical for many mobile and corporate NATs.
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+            ]
         };
 
         const roomKeyInput = document.getElementById('roomKey');
@@ -161,6 +168,16 @@
                 `local video readyState: ${localVideo.readyState}`,
                 `remote video readyState: ${remoteVideo.readyState}`
             ].join('\n');
+        }
+
+        function tryPlayRemoteVideo(reason = 'remote media update') {
+            const playPromise = remoteVideo.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch(err => {
+                    console.warn('Remote video playback blocked:', err);
+                    updateDiagnostics(`${reason} (remote play blocked)`);
+                });
+            }
         }
 
         function setCallButtonsEnabled(enabled) {
@@ -345,6 +362,7 @@
             peerConnection = new RTCPeerConnection(rtcConfig);
             remoteStream = new MediaStream();
             remoteVideo.srcObject = remoteStream;
+            tryPlayRemoteVideo('remote stream attached');
             remoteIceQueue = [];
 
             // 1. Add the local tracks using the most broadly compatible WebRTC path.
@@ -374,6 +392,7 @@
                 if (!remoteStream) {
                     remoteStream = new MediaStream();
                     remoteVideo.srcObject = remoteStream;
+                    tryPlayRemoteVideo('remote stream created in ontrack');
                 }
 
                 const existingTrackIds = new Set(remoteStream.getTracks().map(track => track.id));
@@ -382,10 +401,14 @@
                 }
 
                 event.track.addEventListener('mute', () => updateDiagnostics(`remote ${event.track.kind} muted`));
-                event.track.addEventListener('unmute', () => updateDiagnostics(`remote ${event.track.kind} unmuted`));
+                event.track.addEventListener('unmute', () => {
+                    tryPlayRemoteVideo(`remote ${event.track.kind} unmuted`);
+                    updateDiagnostics(`remote ${event.track.kind} unmuted`);
+                });
                 event.track.addEventListener('ended', () => updateDiagnostics(`remote ${event.track.kind} ended`));
 
                 statusText.innerText = "Connected! Peer media stream verified.";
+                tryPlayRemoteVideo(`remote ${event.track.kind} track received`);
                 updateDiagnostics(`remote ${event.track.kind} track received`);
             };
 
