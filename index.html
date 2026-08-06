@@ -114,8 +114,6 @@
         let joinTimeoutId = null;
         let statsPollId = null;
 
-        const isMobileBrowser = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -125,7 +123,8 @@
                 { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
                 { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
             ],
-            iceTransportPolicy: isMobileBrowser ? 'relay' : 'all'
+            // Let the browser use host/srflx/relay based on network reachability.
+            iceTransportPolicy: 'all'
         };
 
         const roomKeyInput = document.getElementById('roomKey');
@@ -477,9 +476,25 @@
                     const candidateId = `candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
                     const candidateGroup = localParticipantRole === 'caller' ? 'callerCandidates' : 'calleeCandidates';
                     const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
-                    set(candRef, { candidate: event.candidate.toJSON() });
-                    updateDiagnostics('local ICE candidate emitted');
+                    set(candRef, { candidate: event.candidate.toJSON() })
+                        .then(() => updateDiagnostics('local ICE candidate emitted'))
+                        .catch(err => {
+                            console.error('Failed to publish ICE candidate:', err);
+                            updateDiagnostics('local ICE candidate publish failed');
+                        });
+                } else {
+                    updateDiagnostics('local ICE gathering completed');
                 }
+            };
+
+            peerConnection.onicegatheringstatechange = () => {
+                updateDiagnostics(`ICE gathering state: ${peerConnection.iceGatheringState}`);
+                updatePeerStats(`ICE gathering state: ${peerConnection.iceGatheringState}`);
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                updateDiagnostics(`ICE connection state: ${peerConnection.iceConnectionState}`);
+                updatePeerStats(`ICE connection state: ${peerConnection.iceConnectionState}`);
             };
 
             peerConnection.onconnectionstatechange = () => {
@@ -769,7 +784,6 @@
         }
 
         window.addEventListener('beforeunload', cleanupRoomOnExit);
-        window.addEventListener('pagehide', cleanupRoomOnExit);
 
         window.onload = init;
     </script>
