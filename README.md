@@ -8,9 +8,9 @@ Available [here](https://hnikolov.github.io/p2p-meeting)
 
 *   **100% Peer-to-Peer:** Audio and video streams bypass intermediate servers and flow directly between participants.
 *   **Shared Secret Rooms:** Enter an agreed-upon passphrase (e.g., `hristo-room`) to connect securely without sharing complex URL paths.
-*   **Audio-First Bandwidth Optimization:** Automatically hard-caps video bandwidth (~400kbps) and sets audio streams to maximum network priority (`very-high`). If your connection drops, video quality degrades gracefully so audio never stutters.
+*   **Audio-First Bandwidth Optimization:** Automatically hard-caps video bandwidth (~400kbps) and sets audio streams to high network priority (`high`). If your connection drops, video quality degrades gracefully so audio never stutters.
 *   **Hot-Swappable Hardware Selectors:** Switch between multiple microphones or webcams mid-call instantly without dropping the connection.
-*   **Automatic Cleanup:** Database instances clear themselves automatically via browser lifecycle triggers (`beforeunload`) when a participant leaves the page.
+*   **Automatic Cleanup:** Each participant clears their own signaling records automatically via browser lifecycle triggers (`beforeunload` and `pagehide`) when they leave the page.
 
 ---
 
@@ -35,10 +35,10 @@ Before deploying to GitHub Pages or running locally, you must link your own free
 ```javascript
 const firebaseConfig = {
     apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT_://firebaseapp.com",
-    databaseURL: "https://YOUR_PROJECT_://firebaseio.com",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.REGION.firebasedatabase.app",
     projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT_://appspot.com",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
     messagingSenderId: "YOUR_SENDER_ID",
     appId: "YOUR_APP_ID"
 };

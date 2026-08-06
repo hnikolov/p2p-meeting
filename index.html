@@ -22,6 +22,9 @@
         #camBtn { background: #1a73e8; }
         
         .status-bar { margin: 10px 0; font-size: 14px; color: #aecbfa; font-weight: bold; }
+        .diagnostics-panel { width: 100%; max-width: 980px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid #3c4043; border-radius: 8px; background: #151618; color: #d2e3fc; box-sizing: border-box; }
+        .diagnostics-panel summary { cursor: pointer; font-weight: bold; color: #8ab4f8; }
+        .diagnostics-panel pre { margin: 10px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; }
         .video-container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
         .video-box { position: relative; }
         video { width: 45vw; max-width: 480px; min-width: 280px; height: 320px; background: #000; border-radius: 8px; transform: scaleX(-1); object-fit: cover; border: 2px solid #3c4043; }
@@ -46,6 +49,11 @@
     </div>
 
     <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
+
+    <details class="diagnostics-panel">
+        <summary>Diagnostics</summary>
+        <pre id="diagnosticsText">Waiting for local media...</pre>
+    </details>
 
     <div class="input-group">
         <label for="audioSource">Microphone:</label>
@@ -75,19 +83,14 @@
 
     <!-- Offline-Safe Script Routing -->
     <script type="module">
-        //*
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-        import { getDatabase, ref, set, onChildAdded, remove } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
-        /*/
-        import { initializeApp } from "./firebase-app.js";
-        import { getDatabase, ref, set, onChildAdded, remove } from "./firebase-database.js";
-        //*/
+        import { getDatabase, ref, set, onChildAdded, onValue, remove } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
         
         // Replace with your actual Firebase project configuration parameters here
         const firebaseConfig = {
             apiKey: "AIzaSyB2F_QfZFAwitJrFEcvCTadOsLOVETkRpg",
             authDomain: "p2p-meeting-c4e09.firebaseapp.com",
-            databaseURL: "https://console.firebase.google.com/project/p2p-meeting-c4e09/database/p2p-meeting-c4e09-default-rtdb/data/~2F",
+            databaseURL: "https://p2p-meeting-c4e09-default-rtdb.europe-west1.firebasedatabase.app/",
             projectId: "p2p-meeting-c4e09",
             storageBucket: "p2p-meeting-c4e09.firebasestorage.app",
             messagingSenderId: "977559758143",
@@ -98,8 +101,13 @@
         const db = getDatabase(app);
 
         let localStream;
+        let remoteStream = null;
         let peerConnection;
         let activeRoomName = null;
+        let localParticipantRole = null;
+        let remoteIceQueue = [];
+        let signalingUnsubscribers = [];
+        let joinTimeoutId = null;
 
         const rtcConfig = {
             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
@@ -111,32 +119,180 @@
         const muteBtn = document.getElementById('muteBtn');
         const camBtn = document.getElementById('camBtn');
         const statusText = document.getElementById('statusText');
+        const diagnosticsText = document.getElementById('diagnosticsText');
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
+        const audioSource = document.getElementById('audioSource');
+        const videoSource = document.getElementById('videoSource');
+
+        function describeTrack(track) {
+            if (!track) return 'none';
+
+            return [
+                `kind=${track.kind}`,
+                `id=${track.id}`,
+                `enabled=${track.enabled}`,
+                `muted=${track.muted}`,
+                `readyState=${track.readyState}`
+            ].join(', ');
+        }
+
+        function updateDiagnostics(reason = 'state update') {
+            const senders = peerConnection ? peerConnection.getSenders() : [];
+            const receivers = peerConnection ? peerConnection.getReceivers() : [];
+            const localAudioTrack = localStream ? localStream.getAudioTracks()[0] : null;
+            const localVideoTrack = localStream ? localStream.getVideoTracks()[0] : null;
+            const remoteTracks = remoteStream ? remoteStream.getTracks() : [];
+            const receiverTracks = receivers.map(receiver => receiver.track).filter(Boolean);
+
+            diagnosticsText.textContent = [
+                `reason: ${reason}`,
+                `role: ${localParticipantRole || 'none'}`,
+                `room: ${activeRoomName || 'none'}`,
+                `connectionState: ${peerConnection ? peerConnection.connectionState : 'none'}`,
+                `signalingState: ${peerConnection ? peerConnection.signalingState : 'none'}`,
+                `iceConnectionState: ${peerConnection ? peerConnection.iceConnectionState : 'none'}`,
+                `local audio: ${describeTrack(localAudioTrack)}`,
+                `local video: ${describeTrack(localVideoTrack)}`,
+                `remote stream tracks: ${remoteTracks.length ? remoteTracks.map(describeTrack).join(' | ') : 'none'}`,
+                `receiver tracks: ${receiverTracks.length ? receiverTracks.map(describeTrack).join(' | ') : 'none'}`,
+                `sender tracks: ${senders.length ? senders.map(sender => describeTrack(sender.track)).join(' | ') : 'none'}`,
+                `queued ICE candidates: ${remoteIceQueue.length}`,
+                `local video readyState: ${localVideo.readyState}`,
+                `remote video readyState: ${remoteVideo.readyState}`
+            ].join('\n');
+        }
+
+        function setCallButtonsEnabled(enabled) {
+            startBtn.disabled = !enabled;
+            joinBtn.disabled = !enabled;
+        }
+
+        function setDeviceControlsEnabled(enabled) {
+            audioSource.disabled = !enabled;
+            videoSource.disabled = !enabled;
+            muteBtn.disabled = !enabled;
+            camBtn.disabled = !enabled;
+        }
+
+        function clearJoinTimeout() {
+            if (joinTimeoutId) {
+                clearTimeout(joinTimeoutId);
+                joinTimeoutId = null;
+            }
+        }
+
+        function unsubscribeRoomListeners() {
+            signalingUnsubscribers.forEach(unsubscribe => unsubscribe());
+            signalingUnsubscribers = [];
+        }
+
+        function closePeerConnection() {
+            if (!peerConnection) return;
+
+            peerConnection.ontrack = null;
+            peerConnection.onicecandidate = null;
+            peerConnection.onconnectionstatechange = null;
+            peerConnection.close();
+            peerConnection = null;
+            remoteStream = null;
+            remoteIceQueue = [];
+            updateDiagnostics('peer connection closed');
+        }
+
+        async function cleanupRoomArtifacts() {
+            if (!activeRoomName || !localParticipantRole) return;
+
+            const roomBasePath = `rooms/${activeRoomName}`;
+            const cleanupTasks = localParticipantRole === 'caller'
+                ? [
+                    remove(ref(db, `${roomBasePath}/offer`)),
+                    remove(ref(db, `${roomBasePath}/callerCandidates`))
+                ]
+                : [
+                    remove(ref(db, `${roomBasePath}/answer`)),
+                    remove(ref(db, `${roomBasePath}/calleeCandidates`))
+                ];
+
+            await Promise.allSettled(cleanupTasks);
+        }
+
+        async function resetCallSession(statusMessage) {
+            clearJoinTimeout();
+            unsubscribeRoomListeners();
+            closePeerConnection();
+            remoteVideo.srcObject = null;
+            await cleanupRoomArtifacts();
+            activeRoomName = null;
+            localParticipantRole = null;
+            setCallButtonsEnabled(Boolean(localStream));
+            updateDiagnostics('call session reset');
+
+            if (statusMessage) {
+                statusText.innerText = statusMessage;
+            }
+        }
+
+        async function addRemoteIceCandidate(candidateData) {
+            if (!peerConnection) return;
+
+            const iceCandidate = new RTCIceCandidate(candidateData);
+            if (!peerConnection.remoteDescription) {
+                remoteIceQueue.push(iceCandidate);
+                updateDiagnostics('queued remote ICE');
+                return;
+            }
+
+            await peerConnection.addIceCandidate(iceCandidate);
+            updateDiagnostics('applied remote ICE');
+        }
+
+        async function flushRemoteIceQueue() {
+            while (peerConnection && peerConnection.remoteDescription && remoteIceQueue.length > 0) {
+                const candidate = remoteIceQueue.shift();
+
+                try {
+                    await peerConnection.addIceCandidate(candidate);
+                } catch (err) {
+                    console.warn('Queued ICE candidate skipped:', err);
+                }
+            }
+
+            updateDiagnostics('flushed queued ICE');
+        }
+
+        function ensureLocalStreamReady() {
+            if (localStream) return true;
+
+            statusText.innerText = 'Camera and microphone access are required before starting a call.';
+            return false;
+        }
+
+        setCallButtonsEnabled(false);
+        setDeviceControlsEnabled(false);
 
         async function discoverDevices() {
-            const audioSelect = document.getElementById('audioSource');
-            const videoSelect = document.getElementById('videoSource');
-            
             // Fetch all connected audio and video hardware
             const devices = await navigator.mediaDevices.enumerateDevices();
             
             // Clear existing options
-            audioSelect.innerHTML = '';
-            videoSelect.innerHTML = '';
+            audioSource.innerHTML = '';
+            videoSource.innerHTML = '';
 
             devices.forEach(device => {
                 const option = document.createElement('option');
                 option.value = device.deviceId;
 
                 if (device.kind === 'audioinput') {
-                    option.text = device.label || `Microphone ${audioSelect.length + 1}`;
-                    audioSelect.appendChild(option);
+                    option.text = device.label || `Microphone ${audioSource.length + 1}`;
+                    audioSource.appendChild(option);
                 } else if (device.kind === 'videoinput') {
-                    option.text = device.label || `Camera ${videoSelect.length + 1}`;
-                    videoSelect.appendChild(option);
+                    option.text = device.label || `Camera ${videoSource.length + 1}`;
+                    videoSource.appendChild(option);
                 }
             });
+
+            setDeviceControlsEnabled(true);
         }
 
         // Step 1: Open Local Hardware Feed
@@ -159,67 +315,108 @@
                 // Request hardware access first (triggers browser permission pop-up)
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 localVideo.srcObject = localStream;
+                localStream.getTracks().forEach(track => {
+                    track.addEventListener('mute', () => updateDiagnostics(`local ${track.kind} muted`));
+                    track.addEventListener('unmute', () => updateDiagnostics(`local ${track.kind} unmuted`));
+                    track.addEventListener('ended', () => updateDiagnostics(`local ${track.kind} ended`));
+                });
 
                 // Scan the available hardware and populate your dropdown menus
                 await discoverDevices();
+                setCallButtonsEnabled(true);
+                statusText.innerText = "Camera active. Enter a key above to connect.";
+                updateDiagnostics('local media ready');
             } catch (err) {
                 statusText.innerText = "Error: System camera/microphone access denied.";
+                setCallButtonsEnabled(false);
+                setDeviceControlsEnabled(false);
                 console.error(err);
+                updateDiagnostics('local media failed');
             }
         }
 
         // Step 2: Build WebRTC Engine Isolated Inside the Secret Room Node
         function createPeerConnection(roomName) {
-            peerConnection = new RTCPeerConnection(rtcConfig);
-
-            // 1. Add the Audio Track with MAX Priority
-            const audioTrack = localStream.getAudioTracks()[0];
-            if (audioTrack) {
-                peerConnection.addTransceiver(audioTrack, {
-                    direction: "sendrecv",
-                    streams: [localStream],
-                    sendEncodings: [
-                        { priority: "very-high" } // Tells the browser router never to drop audio
-                    ]
-                });
+            if (!localStream) {
+                throw new Error('Local media stream is not ready.');
             }
 
-            // 2. Add the Video Track with Low Priority & Degradation Preferences
-            const videoTrack = localStream.getVideoTracks()[0];
-            if (videoTrack) {
-                const videoTransceiver = peerConnection.addTransceiver(videoTrack, {
-                    direction: "sendrecv",
-                    streams: [localStream],
-                    sendEncodings: [
-                        { 
-                            priority: "low",
-                            maxBitrate: 400000 // Hard-caps video upload to ~400kbps (Prevents choking)
-                        }
-                    ]
-                });
+            closePeerConnection();
+            peerConnection = new RTCPeerConnection(rtcConfig);
+            remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            remoteIceQueue = [];
 
-                // Tells WebRTC: If the network chokes, lower the image resolution, but KEEP the audio and video moving smoothly
-                const sender = videoTransceiver.sender;
-                const parameters = sender.getParameters();
-                parameters.degradationPreference = "maintain-framerate";
-                sender.setParameters(parameters).catch(err => console.error("Degradation error:", err));
+            // 1. Add the local tracks using the most broadly compatible WebRTC path.
+            const audioTrack = localStream.getAudioTracks()[0];
+            const videoTrack = localStream.getVideoTracks()[0];
+
+            if (audioTrack) {
+                const audioSender = peerConnection.addTrack(audioTrack, localStream);
+                const audioParameters = audioSender.getParameters();
+                audioParameters.encodings = audioParameters.encodings && audioParameters.encodings.length > 0
+                    ? audioParameters.encodings.map(encoding => ({ ...encoding, priority: 'high' }))
+                    : [{ priority: 'high' }];
+                audioSender.setParameters(audioParameters).catch(err => console.error('Audio sender parameter error:', err));
+            }
+
+            if (videoTrack) {
+                const videoSender = peerConnection.addTrack(videoTrack, localStream);
+                const videoParameters = videoSender.getParameters();
+                videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
+                    ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'low', maxBitrate: 400000 }))
+                    : [{ priority: 'low', maxBitrate: 400000 }];
+                videoParameters.degradationPreference = 'maintain-framerate';
+                videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
             }
 
             peerConnection.ontrack = (event) => {
-                if (!remoteVideo.srcObject) {
-                    remoteVideo.srcObject = event.streams[0];
-                    statusText.innerText = "Connected! Peer media stream verified.";
+                if (!remoteStream) {
+                    remoteStream = new MediaStream();
+                    remoteVideo.srcObject = remoteStream;
                 }
+
+                const existingTrackIds = new Set(remoteStream.getTracks().map(track => track.id));
+                if (!existingTrackIds.has(event.track.id)) {
+                    remoteStream.addTrack(event.track);
+                }
+
+                event.track.addEventListener('mute', () => updateDiagnostics(`remote ${event.track.kind} muted`));
+                event.track.addEventListener('unmute', () => updateDiagnostics(`remote ${event.track.kind} unmuted`));
+                event.track.addEventListener('ended', () => updateDiagnostics(`remote ${event.track.kind} ended`));
+
+                statusText.innerText = "Connected! Peer media stream verified.";
+                updateDiagnostics(`remote ${event.track.kind} track received`);
             };
 
             // Write local network candidates straight to Firebase
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     const candidateId = `candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-                    const candRef = ref(db, `rooms/${roomName}/${candidateId}`);
+                    const candidateGroup = localParticipantRole === 'caller' ? 'callerCandidates' : 'calleeCandidates';
+                    const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
                     set(candRef, { candidate: event.candidate.toJSON() });
+                    updateDiagnostics('local ICE candidate emitted');
                 }
             };
+
+            peerConnection.onconnectionstatechange = () => {
+                if (peerConnection.connectionState === 'connected') {
+                    clearJoinTimeout();
+                    statusText.innerText = 'Connected! Peer connection established.';
+                    updateDiagnostics('peer connection connected');
+                    return;
+                }
+
+                if (peerConnection.connectionState === 'failed') {
+                    resetCallSession('Connection failed. You can try the same room key again.');
+                    return;
+                }
+
+                updateDiagnostics(`connection state changed to ${peerConnection.connectionState}`);
+            };
+
+            updateDiagnostics('peer connection created');
         }
 
         // Alphanumeric character validator
@@ -234,82 +431,126 @@
 
         // Action A: Host starts the call session
         startBtn.addEventListener('click', async () => {
+            if (!ensureLocalStreamReady()) return;
+
             const roomName = getValidatedKey();
             if (!roomName) return;
 
-            startBtn.disabled = true;
-            joinBtn.disabled = true;
+            setCallButtonsEnabled(false);
             activeRoomName = roomName;
+            localParticipantRole = 'caller';
             statusText.innerText = `Initializing room "${roomName}"...`;
 
-            // Flush out lingering historical database records for a fresh connection
-            const roomRef = ref(db, `rooms/${roomName}`);
-            await remove(roomRef);
+            try {
+                // Flush out lingering historical database records for a fresh connection
+                const roomRef = ref(db, `rooms/${roomName}`);
+                await remove(roomRef);
 
-            createPeerConnection(roomName);
+                createPeerConnection(roomName);
+                listenToRoom(roomName);
 
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                updateDiagnostics('local offer created');
 
-            // Write the local connection configurations to the secret database cluster
-            const sdpRef = ref(db, `rooms/${roomName}/sdp`);
-            await set(sdpRef, { sdp: { type: offer.type, sdp: offer.sdp } });
+                // Write the local connection configurations to the secret database cluster
+                const offerRef = ref(db, `rooms/${roomName}/offer`);
+                await set(offerRef, { sdp: { type: offer.type, sdp: offer.sdp } });
 
-            statusText.innerText = `Room "${roomName}" created. Waiting for friend to join...`;
-            listenToRoom(roomName);
+                statusText.innerText = `Room "${roomName}" created. Waiting for friend to join...`;
+            } catch (err) {
+                console.error('Failed to start room:', err);
+                await resetCallSession('Could not create the room. Check Firebase connectivity and try again.');
+            }
         });
 
         // Action B: Client joins the call session
-        joinBtn.addEventListener('click', () => {
+        joinBtn.addEventListener('click', async () => {
+            if (!ensureLocalStreamReady()) return;
+
             const roomName = getValidatedKey();
             if (!roomName) return;
 
-            startBtn.disabled = true;
-            joinBtn.disabled = true;
+            setCallButtonsEnabled(false);
             activeRoomName = roomName;
+            localParticipantRole = 'callee';
             statusText.innerText = `Connecting to room "${roomName}"...`;
 
-            createPeerConnection(roomName);
-            listenToRoom(roomName);
+            try {
+                createPeerConnection(roomName);
+                listenToRoom(roomName);
+                clearJoinTimeout();
+                updateDiagnostics('waiting for remote offer');
+                joinTimeoutId = setTimeout(() => {
+                    if (peerConnection && !peerConnection.remoteDescription) {
+                        resetCallSession(`No active call was found for room "${roomName}".`);
+                    }
+                }, 15000);
+            } catch (err) {
+                console.error('Failed to join room:', err);
+                await resetCallSession('Could not join the room. Check the shared key and try again.');
+            }
         });
 
         // Step 3: Event Sync Engine mapped to the shared room tree
         function listenToRoom(roomName) {
-            const targetRef = ref(db, `rooms/${roomName}`);
-            
-            onChildAdded(targetRef, async (snapshot) => {
-                const data = snapshot.val();
-                if (!data) return;
+            unsubscribeRoomListeners();
 
-                if (data.sdp) {
-                    // Stop configurations looping if it matches what we sent
-                    if (peerConnection.localDescription && peerConnection.localDescription.sdp === data.sdp.sdp) return;
+            const remoteSdpPath = localParticipantRole === 'caller'
+                ? `rooms/${roomName}/answer`
+                : `rooms/${roomName}/offer`;
+            const remoteCandidatesPath = localParticipantRole === 'caller'
+                ? `rooms/${roomName}/calleeCandidates`
+                : `rooms/${roomName}/callerCandidates`;
+
+            const unsubscribeSdp = onValue(ref(db, remoteSdpPath), async (snapshot) => {
+                const data = snapshot.val();
+                if (!data || !peerConnection || !data.sdp) return;
+
+                try {
+                    if (peerConnection.remoteDescription && peerConnection.remoteDescription.sdp === data.sdp.sdp) {
+                        return;
+                    }
 
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                    await flushRemoteIceQueue();
+                    updateDiagnostics(`remote ${data.sdp.type} applied`);
 
-                    // If a client receives an offer packet, automatically synthesize an answer response
-                    if (data.sdp.type === 'offer') {
-                        statusText.innerText = "Processing call invitation...";
+                    if (data.sdp.type === 'offer' && localParticipantRole === 'callee' && !peerConnection.localDescription) {
+                        clearJoinTimeout();
+                        statusText.innerText = 'Processing call invitation...';
                         const answer = await peerConnection.createAnswer();
                         await peerConnection.setLocalDescription(answer);
+                        updateDiagnostics('local answer created');
 
-                        const sdpRef = ref(db, `rooms/${roomName}/sdp`);
-                        await set(sdpRef, { sdp: { type: answer.type, sdp: answer.sdp } });
-                        statusText.innerText = "Answer transmitted. Syncing streams...";
+                        const answerRef = ref(db, `rooms/${roomName}/answer`);
+                        await set(answerRef, { sdp: { type: answer.type, sdp: answer.sdp } });
+                        statusText.innerText = 'Answer transmitted. Syncing streams...';
                     }
-                } 
-                else if (data.candidate) {
-                    try {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-                    } catch (e) {
-                        console.warn("ICE candidate skipped:", e);
-                    }
+                } catch (err) {
+                    console.error('Remote SDP handling failed:', err);
+                    await resetCallSession('Signaling failed while exchanging session data. Try again.');
                 }
             });
+
+            const unsubscribeCandidates = onChildAdded(ref(db, remoteCandidatesPath), async (snapshot) => {
+                const data = snapshot.val();
+                if (!data || !data.candidate || !peerConnection) return;
+
+                try {
+                    await addRemoteIceCandidate(data.candidate);
+                } catch (err) {
+                    console.warn('ICE candidate skipped:', err);
+                }
+            });
+
+            signalingUnsubscribers.push(unsubscribeSdp, unsubscribeCandidates);
         }
 
         // Hardware Controls: Audio Mute Switch
         muteBtn.addEventListener('click', () => {
+            if (!localStream) return;
+
             const audioTracks = localStream.getAudioTracks();
             if (audioTracks.length > 0) {
                 const isMuted = muteBtn.getAttribute('data-muted') === 'true';
@@ -317,11 +558,14 @@
                 muteBtn.setAttribute('data-muted', !isMuted);
                 muteBtn.innerText = isMuted ? "Mute Audio" : "Unmute Audio";
                 muteBtn.style.background = isMuted ? "#ea4335" : "#34a853";
+                updateDiagnostics(`local audio ${isMuted ? 'enabled' : 'muted'}`);
             }
         });
 
         // Hardware Controls: Camera On/Off Toggle
         camBtn.addEventListener('click', () => {
+            if (!localStream) return;
+
             const videoTracks = localStream.getVideoTracks();
             if (videoTracks.length > 0) {
                 const isCamOff = camBtn.getAttribute('data-off') === 'true';
@@ -329,11 +573,14 @@
                 camBtn.setAttribute('data-off', !isCamOff);
                 camBtn.innerText = isCamOff ? "Turn Camera Off" : "Turn Camera On";
                 camBtn.style.background = isCamOff ? "#1a73e8" : "#ea4335";
+                updateDiagnostics(`local video ${isCamOff ? 'enabled' : 'disabled'}`);
             }
         });
 
         // Seamless Video Camera Switcher
-        document.getElementById('videoSource').addEventListener('change', async (event) => {
+        videoSource.addEventListener('change', async (event) => {
+            if (!localStream) return;
+
             const videoDeviceId = event.target.value;
             if (!videoDeviceId) return;
 
@@ -365,14 +612,19 @@
                         await videoSender.replaceTrack(newVideoTrack);
                     }
                 }
+
+                updateDiagnostics('video source switched');
             } catch (err) {
                 console.error("Failed to switch camera source:", err);
                 alert("Could not switch to the selected camera hardware.");
+                updateDiagnostics('video source switch failed');
             }
         });
 
         // Seamless Microphone Switcher
-        document.getElementById('audioSource').addEventListener('change', async (event) => {
+        audioSource.addEventListener('change', async (event) => {
+            if (!localStream) return;
+
             const audioDeviceId = event.target.value;
             if (!audioDeviceId) return;
 
@@ -391,7 +643,7 @@
                 const oldAudioTrack = localStream.getAudioTracks()[0];
 
                 // If your mute button is currently active, ensure the new track matches that state
-                const isCurrentlyMuted = document.getElementById('muteBtn').getAttribute('data-muted') === 'true';
+                const isCurrentlyMuted = muteBtn.getAttribute('data-muted') === 'true';
                 newAudioTrack.enabled = !isCurrentlyMuted;
 
                 // Swap the track in your local processing memory
@@ -407,20 +659,32 @@
                         await audioSender.replaceTrack(newAudioTrack);
                     }
                 }
+
+                updateDiagnostics('audio source switched');
             } catch (err) {
                 console.error("Failed to switch microphone source:", err);
                 alert("Could not switch to the selected microphone hardware.");
+                updateDiagnostics('audio source switch failed');
             }
         });
 
         // Step 4: Automatic Room Clean-up Execution
         // Triggers instantly when a participant exits the page or closes the browser tab
-        window.addEventListener('beforeunload', () => {
-            if (activeRoomName) {
-                const roomRef = ref(db, `rooms/${activeRoomName}`);
-                remove(roomRef);
+        function cleanupRoomOnExit() {
+            if (!activeRoomName || !localParticipantRole) return;
+
+            const roomBasePath = `rooms/${activeRoomName}`;
+            if (localParticipantRole === 'caller') {
+                remove(ref(db, `${roomBasePath}/offer`));
+                remove(ref(db, `${roomBasePath}/callerCandidates`));
+            } else {
+                remove(ref(db, `${roomBasePath}/answer`));
+                remove(ref(db, `${roomBasePath}/calleeCandidates`));
             }
-        });
+        }
+
+        window.addEventListener('beforeunload', cleanupRoomOnExit);
+        window.addEventListener('pagehide', cleanupRoomOnExit);
 
         window.onload = init;
     </script>
