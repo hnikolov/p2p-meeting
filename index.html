@@ -25,6 +25,7 @@
         .diagnostics-panel { width: 100%; max-width: 980px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid #3c4043; border-radius: 8px; background: #151618; color: #d2e3fc; box-sizing: border-box; }
         .diagnostics-panel summary { cursor: pointer; font-weight: bold; color: #8ab4f8; }
         .diagnostics-panel pre { margin: 10px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; }
+        .diagnostics-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid #2d3135; }
         .video-container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
         .video-box { position: relative; }
         video { width: 45vw; max-width: 480px; min-width: 280px; height: 320px; background: #000; border-radius: 8px; transform: scaleX(-1); object-fit: cover; border: 2px solid #3c4043; }
@@ -52,7 +53,10 @@
 
     <details class="diagnostics-panel">
         <summary>Diagnostics</summary>
-        <pre id="diagnosticsText">Waiting for local media...</pre>
+        <pre id="diagnosticsStateText">Waiting for local media...</pre>
+        <div class="diagnostics-section">
+            <pre id="diagnosticsStatsText">Waiting for peer stats...</pre>
+        </div>
     </details>
 
     <div class="input-group">
@@ -108,6 +112,9 @@
         let remoteIceQueue = [];
         let signalingUnsubscribers = [];
         let joinTimeoutId = null;
+        let statsPollId = null;
+
+        const isMobileBrowser = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
         const rtcConfig = {
             iceServers: [
@@ -117,7 +124,8 @@
                 { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
                 { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
                 { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-            ]
+            ],
+            iceTransportPolicy: isMobileBrowser ? 'relay' : 'all'
         };
 
         const roomKeyInput = document.getElementById('roomKey');
@@ -126,7 +134,8 @@
         const muteBtn = document.getElementById('muteBtn');
         const camBtn = document.getElementById('camBtn');
         const statusText = document.getElementById('statusText');
-        const diagnosticsText = document.getElementById('diagnosticsText');
+        const diagnosticsStateText = document.getElementById('diagnosticsStateText');
+        const diagnosticsStatsText = document.getElementById('diagnosticsStatsText');
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
         const audioSource = document.getElementById('audioSource');
@@ -152,7 +161,7 @@
             const remoteTracks = remoteStream ? remoteStream.getTracks() : [];
             const receiverTracks = receivers.map(receiver => receiver.track).filter(Boolean);
 
-            diagnosticsText.textContent = [
+            diagnosticsStateText.textContent = [
                 `reason: ${reason}`,
                 `role: ${localParticipantRole || 'none'}`,
                 `room: ${activeRoomName || 'none'}`,
@@ -191,29 +200,52 @@
                 let selectedPair = null;
                 let inboundVideo = null;
                 let inboundAudio = null;
+                let outboundVideo = null;
+                let outboundAudio = null;
 
                 stats.forEach(report => {
-                    if (report.type === 'candidate-pair' && report.selected) {
+                    if (report.type === 'candidate-pair' && (report.selected || (report.nominated && report.state === 'succeeded'))) {
                         selectedPair = report;
                     } else if (report.type === 'inbound-rtp' && report.kind === 'video') {
                         inboundVideo = report;
                     } else if (report.type === 'inbound-rtp' && report.kind === 'audio') {
                         inboundAudio = report;
+                    } else if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                        outboundVideo = report;
+                    } else if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+                        outboundAudio = report;
                     }
                 });
 
-                diagnosticsText.textContent = [
-                    diagnosticsText.textContent,
-                    '',
+                diagnosticsStatsText.textContent = [
                     `stats reason: ${reason}`,
                     `selected pair: ${selectedPair ? `${selectedPair.localCandidateId || 'n/a'} -> ${selectedPair.remoteCandidateId || 'n/a'}, state=${selectedPair.state || 'n/a'}, nominated=${selectedPair.nominated || false}, bytesSent=${selectedPair.bytesSent || 0}, bytesReceived=${selectedPair.bytesReceived || 0}` : 'none'}`,
                     `inbound video: ${inboundVideo ? `packetsReceived=${inboundVideo.packetsReceived || 0}, packetsLost=${inboundVideo.packetsLost || 0}, framesReceived=${inboundVideo.framesReceived || 0}, framesDecoded=${inboundVideo.framesDecoded || 0}, bytesReceived=${inboundVideo.bytesReceived || 0}` : 'none'}`,
-                    `inbound audio: ${inboundAudio ? `packetsReceived=${inboundAudio.packetsReceived || 0}, packetsLost=${inboundAudio.packetsLost || 0}, bytesReceived=${inboundAudio.bytesReceived || 0}` : 'none'}`
+                    `inbound audio: ${inboundAudio ? `packetsReceived=${inboundAudio.packetsReceived || 0}, packetsLost=${inboundAudio.packetsLost || 0}, bytesReceived=${inboundAudio.bytesReceived || 0}` : 'none'}`,
+                    `outbound video: ${outboundVideo ? `packetsSent=${outboundVideo.packetsSent || 0}, bytesSent=${outboundVideo.bytesSent || 0}, framesEncoded=${outboundVideo.framesEncoded || 0}` : 'none'}`,
+                    `outbound audio: ${outboundAudio ? `packetsSent=${outboundAudio.packetsSent || 0}, bytesSent=${outboundAudio.bytesSent || 0}` : 'none'}`
                 ].join('\n');
             } catch (err) {
                 console.warn('Failed to read peer stats:', err);
-                updateDiagnostics(`${reason} (stats unavailable)`);
+                diagnosticsStatsText.textContent = `${reason} (stats unavailable)`;
             }
+        }
+
+        function startStatsPolling() {
+            if (statsPollId) return;
+
+            statsPollId = setInterval(() => {
+                if (peerConnection) {
+                    updatePeerStats('poll');
+                }
+            }, 2000);
+        }
+
+        function stopStatsPolling() {
+            if (!statsPollId) return;
+
+            clearInterval(statsPollId);
+            statsPollId = null;
         }
 
         function setCallButtonsEnabled(enabled) {
@@ -250,6 +282,7 @@
             peerConnection = null;
             remoteStream = null;
             remoteIceQueue = [];
+            stopStatsPolling();
             updateDiagnostics('peer connection closed');
         }
 
@@ -400,28 +433,18 @@
             remoteVideo.srcObject = remoteStream;
             tryPlayRemoteVideo('remote stream attached');
             remoteIceQueue = [];
+            startStatsPolling();
 
             // 1. Add the local tracks using the most broadly compatible WebRTC path.
             const audioTrack = localStream.getAudioTracks()[0];
             const videoTrack = localStream.getVideoTracks()[0];
 
             if (audioTrack) {
-                const audioSender = peerConnection.addTrack(audioTrack, localStream);
-                const audioParameters = audioSender.getParameters();
-                audioParameters.encodings = audioParameters.encodings && audioParameters.encodings.length > 0
-                    ? audioParameters.encodings.map(encoding => ({ ...encoding }))
-                    : [{}];
-                audioSender.setParameters(audioParameters).catch(err => console.error('Audio sender parameter error:', err));
+                peerConnection.addTrack(audioTrack, localStream);
             }
 
             if (videoTrack) {
-                const videoSender = peerConnection.addTrack(videoTrack, localStream);
-                const videoParameters = videoSender.getParameters();
-                videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
-                    ? videoParameters.encodings.map(encoding => ({ ...encoding, maxBitrate: 400000 }))
-                    : [{ maxBitrate: 400000 }];
-                videoParameters.degradationPreference = 'maintain-framerate';
-                videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
+                peerConnection.addTrack(videoTrack, localStream);
             }
 
             peerConnection.ontrack = (event) => {
