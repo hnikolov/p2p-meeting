@@ -31,7 +31,7 @@
 </head>
 <body>
 
-    <h1>P2P Serverless Meeting v0.1</h1>
+    <h1>P2P Serverless Meeting v0.2</h1>
     
     <!-- Unified Setup Control Panel -->
     <div class="setup-panel">
@@ -75,7 +75,7 @@
     <!-- Offline-Safe Script Routing -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-        import { getDatabase, get, ref, runTransaction, set, onChildAdded, onValue, remove } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
+        import { getDatabase, get, ref, runTransaction, set, onChildAdded, onValue, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
         
         // Replace with your actual Firebase project configuration parameters here
         const firebaseConfig = {
@@ -125,10 +125,6 @@
         const audioSource = document.getElementById('audioSource');
         const videoSource = document.getElementById('videoSource');
 
-        function updateDiagnostics() {
-            // Diagnostics overlay removed after debugging cleanup.
-        }
-
         function tryPlayRemoteVideo(reason = 'remote media update') {
             const playPromise = remoteVideo.play();
             if (playPromise && typeof playPromise.catch === 'function') {
@@ -138,21 +134,8 @@
                     }
 
                     console.warn('Remote video playback blocked:', err);
-                    updateDiagnostics(`${reason} (remote play blocked)`);
                 });
             }
-        }
-
-        function updatePeerStats() {
-            // Stats polling removed after debugging cleanup.
-        }
-
-        function startStatsPolling() {
-            // Stats polling removed after debugging cleanup.
-        }
-
-        function stopStatsPolling() {
-            // Stats polling removed after debugging cleanup.
         }
 
         function setCallButtonsEnabled(enabled) {
@@ -191,6 +174,7 @@
                 sessionId: activeSessionId,
                 updatedAt: Date.now()
             });
+            await onDisconnect(ownPresenceRef).remove();
         }
 
         async function claimRoleSlot(roomName, role, sessionId) {
@@ -237,8 +221,7 @@
                 }
 
                 return {
-                    mode: 'join',
-                    offerSessionId: offerData.sessionId
+                    mode: 'join'
                 };
             }
 
@@ -274,8 +257,6 @@
             peerConnection = null;
             remoteStream = null;
             remoteIceQueue = [];
-            stopStatsPolling();
-            updateDiagnostics('peer connection closed');
         }
 
         async function cleanupRoomArtifacts() {
@@ -309,7 +290,6 @@
             remotePresenceSeen = false;
             setCallButtonsEnabled(Boolean(localStream));
             syncCallButtonMode();
-            updateDiagnostics('call session reset');
 
             if (statusMessage) {
                 statusText.innerText = statusMessage;
@@ -322,12 +302,10 @@
             const iceCandidate = new RTCIceCandidate(candidateData);
             if (!peerConnection.remoteDescription) {
                 remoteIceQueue.push(iceCandidate);
-                updateDiagnostics('queued remote ICE');
                 return;
             }
 
             await peerConnection.addIceCandidate(iceCandidate);
-            updateDiagnostics('applied remote ICE');
         }
 
         async function flushRemoteIceQueue() {
@@ -340,8 +318,6 @@
                     console.warn('Queued ICE candidate skipped:', err);
                 }
             }
-
-            updateDiagnostics('flushed queued ICE');
         }
 
         function ensureLocalStreamReady() {
@@ -399,25 +375,18 @@
                 // Request hardware access first (triggers browser permission pop-up)
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 localVideo.srcObject = localStream;
-                localStream.getTracks().forEach(track => {
-                    track.addEventListener('mute', () => updateDiagnostics(`local ${track.kind} muted`));
-                    track.addEventListener('unmute', () => updateDiagnostics(`local ${track.kind} unmuted`));
-                    track.addEventListener('ended', () => updateDiagnostics(`local ${track.kind} ended`));
-                });
 
                 // Scan the available hardware and populate your dropdown menus
                 await discoverDevices();
                 setCallButtonsEnabled(true);
                 syncCallButtonMode();
                 statusText.innerText = "Camera active. Enter a key above to connect.";
-                updateDiagnostics('local media ready');
             } catch (err) {
                 statusText.innerText = "Error: System camera/microphone access denied.";
                 setCallButtonsEnabled(false);
                 syncCallButtonMode();
                 setDeviceControlsEnabled(false);
                 console.error(err);
-                updateDiagnostics('local media failed');
             }
         }
 
@@ -433,7 +402,6 @@
             remoteVideo.srcObject = remoteStream;
             tryPlayRemoteVideo('remote stream attached');
             remoteIceQueue = [];
-            startStatsPolling();
 
             // 1. Add the local tracks using the most broadly compatible WebRTC path.
             const audioTrack = localStream.getAudioTracks()[0];
@@ -470,16 +438,12 @@
                     remoteStream.addTrack(event.track);
                 }
 
-                event.track.addEventListener('mute', () => updateDiagnostics(`remote ${event.track.kind} muted`));
                 event.track.addEventListener('unmute', () => {
                     tryPlayRemoteVideo(`remote ${event.track.kind} unmuted`);
-                    updateDiagnostics(`remote ${event.track.kind} unmuted`);
                 });
-                event.track.addEventListener('ended', () => updateDiagnostics(`remote ${event.track.kind} ended`));
 
                 statusText.innerText = "Connected! Peer media stream verified.";
                 tryPlayRemoteVideo(`remote ${event.track.kind} track received`);
-                updateDiagnostics(`remote ${event.track.kind} track received`);
             };
 
             // Write local network candidates straight to Firebase
@@ -492,32 +456,20 @@
                         sessionId: activeSessionId,
                         candidate: event.candidate.toJSON()
                     })
-                        .then(() => updateDiagnostics('local ICE candidate emitted'))
                         .catch(err => {
                             console.error('Failed to publish ICE candidate:', err);
-                            updateDiagnostics('local ICE candidate publish failed');
                         });
-                } else {
-                    updateDiagnostics('local ICE gathering completed');
                 }
             };
 
-            peerConnection.onicegatheringstatechange = () => {
-                updateDiagnostics(`ICE gathering state: ${peerConnection.iceGatheringState}`);
-                updatePeerStats(`ICE gathering state: ${peerConnection.iceGatheringState}`);
-            };
+            peerConnection.onicegatheringstatechange = null;
 
-            peerConnection.oniceconnectionstatechange = () => {
-                updateDiagnostics(`ICE connection state: ${peerConnection.iceConnectionState}`);
-                updatePeerStats(`ICE connection state: ${peerConnection.iceConnectionState}`);
-            };
+            peerConnection.oniceconnectionstatechange = null;
 
             peerConnection.onconnectionstatechange = () => {
                 if (peerConnection.connectionState === 'connected') {
                     clearJoinTimeout();
                     statusText.innerText = 'Connected! Peer connection established.';
-                    updateDiagnostics('peer connection connected');
-                    updatePeerStats('peer connection connected');
                     return;
                 }
 
@@ -525,13 +477,7 @@
                     resetCallSession('Connection failed. You can try the same room key again.');
                     return;
                 }
-
-                updateDiagnostics(`connection state changed to ${peerConnection.connectionState}`);
-                updatePeerStats(`connection state changed to ${peerConnection.connectionState}`);
             };
-
-            updateDiagnostics('peer connection created');
-            updatePeerStats('peer connection created');
         }
 
         // Alphanumeric character validator
@@ -574,7 +520,6 @@
 
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
-                updateDiagnostics('local offer created');
 
                 // Write the local connection configurations to the secret database cluster
                 const offerRef = ref(db, `rooms/${roomName}/offer`);
@@ -610,7 +555,6 @@
                 createPeerConnection(roomName);
                 listenToRoom(roomName);
                 clearJoinTimeout();
-                updateDiagnostics('waiting for remote offer');
                 joinTimeoutId = setTimeout(() => {
                     if (peerConnection && !peerConnection.remoteDescription) {
                         resetCallSession(`No active call was found for room "${roomName}".`);
@@ -622,7 +566,7 @@
             }
         }
 
-        // Unified Action: Auto Start or Join based on room state
+        // Unified Action: auto start or join based on room state
         callBtn.addEventListener('click', async () => {
             if (activeRoomName) {
                 await resetCallSession('Disconnected. Enter a key above to call again.');
@@ -702,7 +646,6 @@
 
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
                     await flushRemoteIceQueue();
-                    updateDiagnostics(`remote ${data.sdp.type} applied`);
 
                     if (data.sdp.type === 'offer' && localParticipantRole === 'callee' && !peerConnection.localDescription) {
                         const calleeSlotClaimed = await claimRoleSlot(roomName, 'callee', activeSessionId);
@@ -715,7 +658,6 @@
                         statusText.innerText = 'Processing call invitation...';
                         const answer = await peerConnection.createAnswer();
                         await peerConnection.setLocalDescription(answer);
-                        updateDiagnostics('local answer created');
 
                         const answerRef = ref(db, `rooms/${roomName}/answer`);
                         await set(answerRef, {
@@ -751,7 +693,7 @@
                 }
 
                 if (remotePresenceSeen) {
-                    await resetCallSession('Remote peer disconnected. You can start or join a new call.');
+                    await resetCallSession('Remote peer disconnected. You can press Call again.');
                 }
             });
 
@@ -769,7 +711,6 @@
                 muteBtn.setAttribute('data-muted', !isMuted);
                 muteBtn.innerText = isMuted ? "Mute Audio" : "Unmute Audio";
                 muteBtn.style.background = isMuted ? "#ea4335" : "#34a853";
-                updateDiagnostics(`local audio ${isMuted ? 'enabled' : 'muted'}`);
             }
         });
 
@@ -784,7 +725,6 @@
                 camBtn.setAttribute('data-off', !isCamOff);
                 camBtn.innerText = isCamOff ? "Turn Camera Off" : "Turn Camera On";
                 camBtn.style.background = isCamOff ? "#1a73e8" : "#ea4335";
-                updateDiagnostics(`local video ${isCamOff ? 'enabled' : 'disabled'}`);
             }
         });
 
@@ -823,12 +763,9 @@
                         await videoSender.replaceTrack(newVideoTrack);
                     }
                 }
-
-                updateDiagnostics('video source switched');
             } catch (err) {
                 console.error("Failed to switch camera source:", err);
                 alert("Could not switch to the selected camera hardware.");
-                updateDiagnostics('video source switch failed');
             }
         });
 
@@ -870,12 +807,9 @@
                         await audioSender.replaceTrack(newAudioTrack);
                     }
                 }
-
-                updateDiagnostics('audio source switched');
             } catch (err) {
                 console.error("Failed to switch microphone source:", err);
                 alert("Could not switch to the selected microphone hardware.");
-                updateDiagnostics('audio source switch failed');
             }
         });
 
@@ -888,9 +822,11 @@
             if (localParticipantRole === 'caller') {
                 remove(ref(db, `${roomBasePath}/offer`));
                 remove(ref(db, `${roomBasePath}/callerCandidates`));
+                remove(ref(db, `${roomBasePath}/participants/caller`));
             } else {
                 remove(ref(db, `${roomBasePath}/answer`));
                 remove(ref(db, `${roomBasePath}/calleeCandidates`));
+                remove(ref(db, `${roomBasePath}/participants/callee`));
             }
         }
 
