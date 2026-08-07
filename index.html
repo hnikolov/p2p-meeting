@@ -6,70 +6,466 @@
     <title>P2P Meeting via Secret Key</title>
     <link rel="icon" href="data:,">
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #202124; color: white; margin: 0; padding: 20px; }
-        .setup-panel { background: #303134; padding: 20px; border-radius: 8px; margin-bottom: 20px; width: 100%; max-width: 500px; box-sizing: border-box; }
-        .input-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
-        input { padding: 12px; border-radius: 4px; border: 1px solid #5f6368; background: #202124; color: white; font-size: 16px; }
-        .btn-group { display: flex; gap: 10px; }
-        button { flex: 1; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px; color: white; transition: background 0.2s; }
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: sans-serif;
+            background: #202124;
+            color: white;
+            margin: 0;
+            padding: 12px;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .app-shell {
+            width: 100%;
+            max-width: 1300px;
+            margin: 0 auto;
+            height: 100%;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            gap: 10px;
+        }
+
+        .top-panel {
+            background: #303134;
+            border: 1px solid #3c4043;
+            border-radius: 10px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .top-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            min-height: 38px;
+        }
+
+        .top-center-controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .top-right-controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            min-width: 380px;
+        }
+
+        .top-right-controls label {
+            font-size: 13px;
+            color: #bdc1c6;
+            white-space: nowrap;
+        }
+
+        .status-bar {
+            margin: 0;
+            font-size: 14px;
+            color: #aecbfa;
+            font-weight: bold;
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        input,
+        select {
+            padding: 10px 12px;
+            border-radius: 4px;
+            border: 1px solid #5f6368;
+            background: #202124;
+            color: white;
+            font-size: 14px;
+        }
+
+        #roomKey {
+            width: min(460px, 60vw);
+        }
+
+        select {
+            min-width: 0;
+        }
+
+        .device-select-wrap {
+            position: relative;
+            width: 240px;
+            min-width: 240px;
+            max-width: 240px;
+            height: 40px;
+            flex: 0 0 240px;
+            overflow: visible;
+        }
+
+        .device-select {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 100%;
+            height: 40px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            z-index: 1;
+        }
+
+        .device-select-wrap:focus-within {
+            z-index: 8;
+        }
+
+        .device-select-wrap:focus-within .device-select {
+            width: min(420px, 52vw);
+            z-index: 9;
+        }
+
+        button {
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            color: white;
+            transition: background 0.2s;
+            padding: 10px 14px;
+            white-space: nowrap;
+        }
+
+        #callBtn {
+            width: 110px;
+            min-width: 110px;
+        }
+
         .btn-call { background: #1a73e8; }
         .btn-call:hover { background: #1557b0; }
         .btn-call-disconnect { background: #fbbc04; color: #202124; }
         .btn-call-disconnect:hover { background: #f9ab00; }
-        .controls-row { display: flex; gap: 15px; margin-top: 20px; justify-content: center; width: 100%; }
-        .btn-control { max-width: 160px; font-size: 13px; }
+
+        .video-stage {
+            position: relative;
+            width: 100%;
+            min-height: 0;
+            height: 100%;
+            background: #000;
+            border: 2px solid #3c4043;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .main-video-host {
+            width: 100%;
+            height: 100%;
+        }
+
+        .main-video-host video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+
+        #remoteVideo {
+            transform: none;
+        }
+
+        .pip-card {
+            position: absolute;
+            right: 16px;
+            bottom: 16px;
+            width: min(24vw, 320px);
+            min-width: 190px;
+            aspect-ratio: 4 / 3;
+            border: 2px solid #3c4043;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+            transition: top 0.18s ease, right 0.18s ease, bottom 0.18s ease, left 0.18s ease, transform 0.18s ease, width 0.18s ease;
+        }
+
+        .pip-video-host {
+            width: 100%;
+            height: 100%;
+        }
+
+        .pip-video-host video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+
+        #localVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            background: #000;
+        }
+
+        .video-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .remote-label {
+            z-index: 2;
+        }
+
+        .bottom-bar {
+            background: #303134;
+            border: 1px solid #3c4043;
+            border-radius: 10px;
+            padding: 8px 12px;
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 12px;
+            align-items: center;
+            min-height: 52px;
+        }
+
+        .bottom-left-meta {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            min-width: 84px;
+        }
+
+        .app-version {
+            font-size: 12px;
+            color: #bdc1c6;
+            white-space: nowrap;
+        }
+
+        .bottom-center-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .bottom-right-controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .pip-text {
+            font-size: 13px;
+            color: #bdc1c6;
+        }
+
+        .btn-control {
+            width: 110px;
+            min-width: 110px;
+            max-width: none;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .btn-pip {
+            background: #3c4043;
+            color: #e8eaed;
+            width: 88px;
+            min-width: 88px;
+        }
+
+        .btn-pip-active {
+            background: #5f6368;
+        }
+
+        .btn-pip:disabled {
+            opacity: 0.85;
+            cursor: default;
+        }
+
         #muteBtn { background: #ea4335; }
         #camBtn { background: #1a73e8; }
-        
-        .status-bar { margin: 10px 0; font-size: 14px; color: #aecbfa; font-weight: bold; }
-        .video-container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
-        .video-box { position: relative; }
-        video { width: 45vw; max-width: 480px; min-width: 280px; height: 320px; background: #000; border-radius: 8px; transform: scaleX(-1); object-fit: cover; border: 2px solid #3c4043; }
-        #remoteVideo { transform: none; }
-        .video-label { position: absolute; bottom: 15px; left: 15px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+
+        .btn-toggle-active {
+            background: #34a853 !important;
+            color: #202124;
+        }
+
+        @media (max-width: 980px) {
+            .top-row,
+            .bottom-bar {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            .top-center-controls,
+            .bottom-center-controls,
+            .bottom-left-meta {
+                justify-content: flex-start;
+            }
+
+            .top-right-controls,
+            .bottom-right-controls {
+                justify-content: flex-start;
+                min-width: 0;
+                flex-wrap: wrap;
+            }
+
+            .status-bar {
+                text-align: left;
+            }
+
+            #roomKey {
+                width: 100%;
+            }
+
+            #callBtn,
+            .btn-control {
+                width: 100px;
+                min-width: 100px;
+            }
+
+            .device-select-wrap {
+                width: 240px;
+                min-width: 240px;
+                max-width: 240px;
+                flex-basis: 240px;
+            }
+
+            .device-select-wrap:focus-within .device-select {
+                width: min(360px, 86vw);
+            }
+
+            .btn-pip {
+                width: 84px;
+                min-width: 84px;
+            }
+
+            .pip-card {
+                width: min(42vw, 260px);
+                min-width: 130px;
+                right: 10px;
+                bottom: 10px;
+            }
+        }
+
+        @media (max-width: 700px) {
+            body {
+                padding: 8px;
+            }
+
+            .app-shell {
+                gap: 8px;
+            }
+
+            .top-panel,
+            .bottom-bar {
+                padding: 8px;
+            }
+
+            .top-row,
+            .bottom-bar {
+                gap: 6px;
+            }
+
+            .bottom-center-controls,
+            .bottom-right-controls {
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+
+            #callBtn,
+            .btn-control {
+                width: 92px;
+                min-width: 92px;
+            }
+
+            .device-select-wrap {
+                width: min(250px, 90vw);
+                min-width: 0;
+                max-width: none;
+                flex-basis: auto;
+            }
+
+            .device-select-wrap:focus-within .device-select {
+                width: min(320px, 90vw);
+            }
+
+            .btn-pip {
+                width: 78px;
+                min-width: 78px;
+            }
+        }
     </style>
 </head>
 <body>
 
-    <h1>P2P Serverless Meeting v0.2</h1>
-    
-    <!-- Unified Setup Control Panel -->
-    <div class="setup-panel">
-        <div class="input-group">
-            <label for="roomKey">Enter Shared Secret Key:</label>
-            <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
-        </div>
-        <div class="btn-group">
-            <button id="callBtn" class="btn-call">Call</button>
-        </div>
-    </div>
+    <div class="app-shell">
+        <header class="top-panel">
+            <div class="top-row">
+                <div class="top-center-controls">
+                    <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
+                    <button id="callBtn" class="btn-call" title="Call or End (C)">Call</button>
+                </div>
+                <div class="top-right-controls">
+                    <label for="audioSource">Mic:</label>
+                    <div class="device-select-wrap">
+                        <select id="audioSource" class="device-select"></select>
+                    </div>
+                </div>
+            </div>
+            <div class="top-row">
+                <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
+                <div class="top-right-controls">
+                    <label for="videoSource">Cam:</label>
+                    <div class="device-select-wrap">
+                        <select id="videoSource" class="device-select"></select>
+                    </div>
+                </div>
+            </div>
+        </header>
 
-    <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
+        <main class="video-stage">
+            <div id="mainVideoHost" class="main-video-host">
+                <video id="remoteVideo" autoplay playsinline></video>
+            </div>
+            <div id="mainVideoLabel" class="video-label remote-label">Friend (Remote)</div>
 
-    <div class="input-group">
-        <label for="audioSource">Microphone:</label>
-        <select id="audioSource"></select>
-    </div>
-    <div class="input-group">
-        <label for="videoSource">Camera:</label>
-        <select id="videoSource"></select>
-    </div>
+            <div id="pipCard" class="pip-card">
+                <div id="pipVideoHost" class="pip-video-host">
+                    <video id="localVideo" autoplay playsinline muted></video>
+                </div>
+                <div id="pipVideoLabel" class="video-label">You (Local)</div>
+            </div>
+        </main>
 
-    <div class="video-container">
-        <div class="video-box">
-            <video id="localVideo" autoplay playsinline muted></video>
-            <div class="video-label">You (Local)</div>
-        </div>
-        <div class="video-box">
-            <video id="remoteVideo" autoplay playsinline></video>
-            <div class="video-label">Friend (Remote)</div>
-        </div>
-    </div>
-
-    <!-- Media Controls Row -->
-    <div class="controls-row">
-        <button id="muteBtn" class="btn-control" data-muted="false">Mute Audio</button>
-        <button id="camBtn" class="btn-control" data-off="false">Turn Camera Off</button>
+        <footer class="bottom-bar">
+            <div class="bottom-left-meta">
+                <span id="appVersion" class="app-version">v0.2</span>
+            </div>
+            <div class="bottom-center-controls">
+                <button id="muteBtn" class="btn-control" data-muted="false" title="Mute toggle (M)">Mute</button>
+                <button id="camBtn" class="btn-control" data-off="false" title="Camera toggle (V)">Camera</button>
+            </div>
+            <div class="bottom-right-controls">
+                <span class="pip-text">PiP:</span>
+                <button id="moveBtn" class="btn-control btn-pip" type="button" title="Move PiP (P)" disabled>Move</button>
+                <button id="swapBtn" class="btn-control btn-pip" type="button" title="Swap main/PiP (X)" disabled>Swap</button>
+                <button id="sizeBtn" class="btn-control btn-pip" type="button" title="Cycle PiP size (Z)" disabled>Size</button>
+            </div>
+        </footer>
     </div>
 
     <!-- Offline-Safe Script Routing -->
@@ -122,8 +518,56 @@
         const statusText = document.getElementById('statusText');
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
+        const mainVideoHost = document.getElementById('mainVideoHost');
+        const pipVideoHost = document.getElementById('pipVideoHost');
+        const mainVideoLabel = document.getElementById('mainVideoLabel');
+        const pipVideoLabel = document.getElementById('pipVideoLabel');
+        const pipCard = document.getElementById('pipCard');
         const audioSource = document.getElementById('audioSource');
         const videoSource = document.getElementById('videoSource');
+        const moveBtn = document.getElementById('moveBtn');
+        const swapBtn = document.getElementById('swapBtn');
+        const sizeBtn = document.getElementById('sizeBtn');
+        const appVersionText = document.getElementById('appVersion');
+
+        const APP_VERSION = 'v0.2.1';
+
+        const KEYBOARD_SHORTCUTS = {
+            call: 'c',
+            mute: 'm',
+            camera: 'v',
+            move: 'p',
+            swap: 'x',
+            size: 'z'
+        };
+
+        const DEVICE_SELECT_REFOCUS_GUARD_MS = 150;
+
+        const PIP_POSITIONS = [
+            { key: 'top-right', top: '16px', right: '16px', bottom: 'auto', left: 'auto', transform: 'none' },
+            { key: 'top-center', top: '16px', right: 'auto', bottom: 'auto', left: '50%', transform: 'translateX(-50%)' },
+            { key: 'top-left', top: '16px', right: 'auto', bottom: 'auto', left: '16px', transform: 'none' },
+            { key: 'bottom-left', top: 'auto', right: 'auto', bottom: '16px', left: '16px', transform: 'none' },
+            { key: 'bottom-center', top: 'auto', right: 'auto', bottom: '16px', left: '50%', transform: 'translateX(-50%)' },
+            { key: 'bottom-right', top: 'auto', right: '16px', bottom: '16px', left: 'auto', transform: 'none' }
+        ];
+
+        const PIP_SIZES = [
+            { key: 'small', width: 'min(20vw, 240px)', minWidth: '140px' },
+            { key: 'medium', width: 'min(24vw, 320px)', minWidth: '190px' },
+            { key: 'large', width: 'min(30vw, 400px)', minWidth: '220px' }
+        ];
+
+        const pipViewState = {
+            positionIndex: PIP_POSITIONS.length - 1,
+            sizeIndex: 1,
+            mainView: 'remote'
+        };
+
+        const deviceSelectUiState = {
+            audioOpenedAt: 0,
+            videoOpenedAt: 0
+        };
 
         function tryPlayRemoteVideo(reason = 'remote media update') {
             const playPromise = remoteVideo.play();
@@ -145,7 +589,7 @@
         function syncCallButtonMode() {
             const isConnectedOrConnecting = Boolean(activeRoomName);
 
-            callBtn.innerText = isConnectedOrConnecting ? 'Disconnect' : 'Call';
+            callBtn.innerText = isConnectedOrConnecting ? 'Leave' : 'Call';
             callBtn.classList.toggle('btn-call-disconnect', isConnectedOrConnecting);
         }
 
@@ -154,6 +598,176 @@
             videoSource.disabled = !enabled;
             muteBtn.disabled = !enabled;
             camBtn.disabled = !enabled;
+        }
+
+        function setPipControlsEnabled(enabled) {
+            moveBtn.disabled = !enabled;
+            swapBtn.disabled = !enabled;
+            sizeBtn.disabled = !enabled;
+        }
+
+        function syncSelectedDeviceTitles() {
+            const audioLabel = audioSource.selectedOptions[0] ? audioSource.selectedOptions[0].text : '';
+            const videoLabel = videoSource.selectedOptions[0] ? videoSource.selectedOptions[0].text : '';
+            audioSource.title = audioLabel;
+            videoSource.title = videoLabel;
+        }
+
+        function collapseDeviceSelector(selectElement) {
+            if (!selectElement) return;
+
+            requestAnimationFrame(() => {
+                selectElement.blur();
+            });
+        }
+
+        function markDeviceSelectorOpen(selectElement) {
+            if (selectElement === audioSource) {
+                deviceSelectUiState.audioOpenedAt = Date.now();
+                return;
+            }
+
+            if (selectElement === videoSource) {
+                deviceSelectUiState.videoOpenedAt = Date.now();
+            }
+        }
+
+        function getDeviceSelectorOpenTime(selectElement) {
+            if (selectElement === audioSource) {
+                return deviceSelectUiState.audioOpenedAt;
+            }
+
+            if (selectElement === videoSource) {
+                return deviceSelectUiState.videoOpenedAt;
+            }
+
+            return 0;
+        }
+
+        function handleDeviceSelectorClick(selectElement) {
+            const openedAt = getDeviceSelectorOpenTime(selectElement);
+            if (!openedAt) return;
+
+            if (Date.now() - openedAt < DEVICE_SELECT_REFOCUS_GUARD_MS) {
+                return;
+            }
+
+            collapseDeviceSelector(selectElement);
+        }
+
+        function applyPipPosition() {
+            const position = PIP_POSITIONS[pipViewState.positionIndex];
+            pipCard.style.top = position.top;
+            pipCard.style.right = position.right;
+            pipCard.style.bottom = position.bottom;
+            pipCard.style.left = position.left;
+            pipCard.style.transform = position.transform;
+        }
+
+        function applyPipSize() {
+            const size = PIP_SIZES[pipViewState.sizeIndex];
+            pipCard.style.width = size.width;
+            pipCard.style.minWidth = size.minWidth;
+            sizeBtn.innerText = 'Size';
+            sizeBtn.dataset.currentSize = size.key;
+        }
+
+        function applyMainView() {
+            if (pipViewState.mainView === 'remote') {
+                if (mainVideoHost.firstElementChild !== remoteVideo) {
+                    mainVideoHost.appendChild(remoteVideo);
+                }
+                if (pipVideoHost.firstElementChild !== localVideo) {
+                    pipVideoHost.appendChild(localVideo);
+                }
+
+                mainVideoLabel.innerText = 'Friend (Remote)';
+                pipVideoLabel.innerText = 'You (Local)';
+                localVideo.muted = true;
+            } else {
+                if (mainVideoHost.firstElementChild !== localVideo) {
+                    mainVideoHost.appendChild(localVideo);
+                }
+                if (pipVideoHost.firstElementChild !== remoteVideo) {
+                    pipVideoHost.appendChild(remoteVideo);
+                }
+
+                mainVideoLabel.innerText = 'You (Local)';
+                pipVideoLabel.innerText = 'Friend (Remote)';
+                localVideo.muted = true;
+            }
+
+            swapBtn.classList.toggle('btn-pip-active', pipViewState.mainView === 'local');
+        }
+
+        function applyPipLayoutState() {
+            applyPipPosition();
+            applyPipSize();
+            applyMainView();
+        }
+
+        function updateToggleButtonVisuals() {
+            const isMuted = muteBtn.getAttribute('data-muted') === 'true';
+            const isCameraOff = camBtn.getAttribute('data-off') === 'true';
+
+            muteBtn.classList.toggle('btn-toggle-active', isMuted);
+            camBtn.classList.toggle('btn-toggle-active', isCameraOff);
+
+            muteBtn.title = isMuted ? 'Unmute (M)' : 'Mute (M)';
+            camBtn.title = isCameraOff ? 'Turn camera on (V)' : 'Turn camera off (V)';
+        }
+
+        function isTypingIntoControl(target) {
+            if (!target) return false;
+            const tag = target.tagName ? target.tagName.toLowerCase() : '';
+            return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+        }
+
+        function triggerButton(button) {
+            if (!button || button.disabled) return;
+            button.click();
+        }
+
+        function handleKeyboardShortcuts(event) {
+            if (event.defaultPrevented || event.repeat) return;
+            if (event.altKey || event.ctrlKey || event.metaKey) return;
+            if (isTypingIntoControl(event.target)) return;
+
+            const key = event.key.toLowerCase();
+            if (key === KEYBOARD_SHORTCUTS.call) {
+                event.preventDefault();
+                triggerButton(callBtn);
+                return;
+            }
+
+            if (key === KEYBOARD_SHORTCUTS.mute) {
+                event.preventDefault();
+                triggerButton(muteBtn);
+                return;
+            }
+
+            if (key === KEYBOARD_SHORTCUTS.camera) {
+                event.preventDefault();
+                triggerButton(camBtn);
+                return;
+            }
+
+            if (key === KEYBOARD_SHORTCUTS.move) {
+                event.preventDefault();
+                triggerButton(moveBtn);
+                return;
+            }
+
+            if (key === KEYBOARD_SHORTCUTS.swap) {
+                event.preventDefault();
+                triggerButton(swapBtn);
+                return;
+            }
+
+            if (key === KEYBOARD_SHORTCUTS.size) {
+                event.preventDefault();
+                triggerButton(sizeBtn);
+            }
         }
 
         function createSessionId() {
@@ -330,6 +944,11 @@
         setCallButtonsEnabled(false);
         syncCallButtonMode();
         setDeviceControlsEnabled(false);
+        setPipControlsEnabled(false);
+        applyPipLayoutState();
+        updateToggleButtonVisuals();
+        appVersionText.innerText = APP_VERSION;
+        window.addEventListener('keydown', handleKeyboardShortcuts);
 
         async function discoverDevices() {
             // Fetch all connected audio and video hardware
@@ -345,14 +964,17 @@
 
                 if (device.kind === 'audioinput') {
                     option.text = device.label || `Microphone ${audioSource.length + 1}`;
+                    option.title = option.text;
                     audioSource.appendChild(option);
                 } else if (device.kind === 'videoinput') {
                     option.text = device.label || `Camera ${videoSource.length + 1}`;
+                    option.title = option.text;
                     videoSource.appendChild(option);
                 }
             });
 
             setDeviceControlsEnabled(true);
+            syncSelectedDeviceTitles();
         }
 
         // Step 1: Open Local Hardware Feed
@@ -380,12 +1002,14 @@
                 await discoverDevices();
                 setCallButtonsEnabled(true);
                 syncCallButtonMode();
+                setPipControlsEnabled(true);
                 statusText.innerText = "Camera active. Enter a key above to connect.";
             } catch (err) {
                 statusText.innerText = "Error: System camera/microphone access denied.";
                 setCallButtonsEnabled(false);
                 syncCallButtonMode();
                 setDeviceControlsEnabled(false);
+                setPipControlsEnabled(false);
                 console.error(err);
             }
         }
@@ -709,8 +1333,8 @@
                 const isMuted = muteBtn.getAttribute('data-muted') === 'true';
                 audioTracks[0].enabled = isMuted; // Toggle transmission states
                 muteBtn.setAttribute('data-muted', !isMuted);
-                muteBtn.innerText = isMuted ? "Mute Audio" : "Unmute Audio";
-                muteBtn.style.background = isMuted ? "#ea4335" : "#34a853";
+                muteBtn.innerText = 'Mute';
+                updateToggleButtonVisuals();
             }
         });
 
@@ -723,14 +1347,40 @@
                 const isCamOff = camBtn.getAttribute('data-off') === 'true';
                 videoTracks[0].enabled = isCamOff; // Toggle transmission states
                 camBtn.setAttribute('data-off', !isCamOff);
-                camBtn.innerText = isCamOff ? "Turn Camera Off" : "Turn Camera On";
-                camBtn.style.background = isCamOff ? "#1a73e8" : "#ea4335";
+                camBtn.innerText = 'Camera';
+                updateToggleButtonVisuals();
             }
         });
 
+        moveBtn.addEventListener('click', () => {
+            pipViewState.positionIndex = (pipViewState.positionIndex + 1) % PIP_POSITIONS.length;
+            applyPipPosition();
+        });
+
+        swapBtn.addEventListener('click', () => {
+            pipViewState.mainView = pipViewState.mainView === 'remote' ? 'local' : 'remote';
+            applyMainView();
+        });
+
+        sizeBtn.addEventListener('click', () => {
+            pipViewState.sizeIndex = (pipViewState.sizeIndex + 1) % PIP_SIZES.length;
+            applyPipSize();
+        });
+
         // Seamless Video Camera Switcher
+        videoSource.addEventListener('pointerdown', (event) => {
+            markDeviceSelectorOpen(event.target);
+        });
+
+        videoSource.addEventListener('click', (event) => {
+            handleDeviceSelectorClick(event.target);
+        });
+
         videoSource.addEventListener('change', async (event) => {
             if (!localStream) return;
+
+            syncSelectedDeviceTitles();
+            collapseDeviceSelector(event.target);
 
             const videoDeviceId = event.target.value;
             if (!videoDeviceId) return;
@@ -770,8 +1420,19 @@
         });
 
         // Seamless Microphone Switcher
+        audioSource.addEventListener('pointerdown', (event) => {
+            markDeviceSelectorOpen(event.target);
+        });
+
+        audioSource.addEventListener('click', (event) => {
+            handleDeviceSelectorClick(event.target);
+        });
+
         audioSource.addEventListener('change', async (event) => {
             if (!localStream) return;
+
+            syncSelectedDeviceTitles();
+            collapseDeviceSelector(event.target);
 
             const audioDeviceId = event.target.value;
             if (!audioDeviceId) return;
