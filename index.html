@@ -6,6 +6,16 @@
     <title>P2P Meeting via Secret Key</title>
     <link rel="icon" href="data:,">
     <style>
+        :root {
+            --app-vh: 100dvh;
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-right: env(safe-area-inset-right, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-left: env(safe-area-inset-left, 0px);
+            --pip-btn-width: 80px;
+            --main-btn-width: 94px;
+        }
+
         * {
             box-sizing: border-box;
         }
@@ -15,8 +25,9 @@
             background: #202124;
             color: white;
             margin: 0;
-            padding: 12px;
-            height: 100vh;
+            padding: calc(12px + var(--safe-top)) calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left));
+            height: var(--app-vh);
+            min-height: var(--app-vh);
             overflow: hidden;
         }
 
@@ -406,6 +417,20 @@
             flex-wrap: wrap;
         }
 
+        body.compact-viewport .app-shell {
+            gap: 6px;
+        }
+
+        body.compact-viewport .top-panel,
+        body.compact-viewport .bottom-bar {
+            padding: 6px 8px;
+        }
+
+        body.compact-viewport .top-card,
+        body.compact-viewport .bottom-card {
+            padding: 6px 8px;
+        }
+
         @media (max-width: 980px) {
             .top-panel,
             .bottom-bar {
@@ -550,16 +575,17 @@
             .bottom-card-right {
                 flex-wrap: nowrap;
                 justify-content: center;
+                gap: clamp(4px, 1.6vw, 8px);
             }
 
             .bottom-card-right .btn-pip {
-                width: 80px;
-                min-width: 80px;
+                width: var(--pip-btn-width);
+                min-width: var(--pip-btn-width);
             }
 
             .bottom-card-center .btn-control {
-                width: 94px;
-                min-width: 94px;
+                width: var(--main-btn-width);
+                min-width: var(--main-btn-width);
             }
 
             .pip-text {
@@ -577,7 +603,7 @@
 
         @media (max-width: 700px) {
             body {
-                padding: 8px;
+                padding: calc(8px + var(--safe-top)) calc(8px + var(--safe-right)) calc(8px + var(--safe-bottom)) calc(8px + var(--safe-left));
             }
 
             .app-shell {
@@ -758,7 +784,7 @@
         const sizeBtn = document.getElementById('sizeBtn');
         const appVersionText = document.getElementById('appVersion');
 
-        const APP_VERSION = 'v0.2.2';
+        const APP_VERSION = 'v0.2.3';
 
         const KEYBOARD_SHORTCUTS = {
             call: 'c',
@@ -796,6 +822,41 @@
             audioOpenedAt: 0,
             videoOpenedAt: 0
         };
+
+        let viewportMetricsRafId = 0;
+
+        function updateViewportLayoutMetrics() {
+            const visualViewport = window.visualViewport;
+            const viewportWidth = Math.round(visualViewport ? visualViewport.width : window.innerWidth);
+            const viewportHeight = Math.round(visualViewport ? visualViewport.height : window.innerHeight);
+            const isPortraitViewport = viewportHeight >= viewportWidth;
+
+            document.documentElement.style.setProperty('--app-vh', `${viewportHeight}px`);
+
+            const compactViewport = isPortraitViewport && viewportHeight < 700;
+            document.body.classList.toggle('compact-viewport', compactViewport);
+
+            let pipButtonWidth = 80;
+            let mainButtonWidth = 94;
+            if (isPortraitViewport) {
+                pipButtonWidth = Math.max(66, Math.min(80, Math.floor((viewportWidth - 96) / 3)));
+                mainButtonWidth = Math.max(82, Math.min(94, Math.floor((viewportWidth - 126) / 2)));
+            }
+
+            document.documentElement.style.setProperty('--pip-btn-width', `${pipButtonWidth}px`);
+            document.documentElement.style.setProperty('--main-btn-width', `${mainButtonWidth}px`);
+        }
+
+        function scheduleViewportLayoutMetricsUpdate() {
+            if (viewportMetricsRafId) {
+                cancelAnimationFrame(viewportMetricsRafId);
+            }
+
+            viewportMetricsRafId = requestAnimationFrame(() => {
+                viewportMetricsRafId = 0;
+                updateViewportLayoutMetrics();
+            });
+        }
 
         function tryPlayRemoteVideo(reason = 'remote media update') {
             const playPromise = remoteVideo.play();
@@ -1173,10 +1234,18 @@
         syncCallButtonMode();
         setDeviceControlsEnabled(false);
         setPipControlsEnabled(false);
+        updateViewportLayoutMetrics();
         applyPipLayoutState();
         updateToggleButtonVisuals();
         appVersionText.innerText = APP_VERSION;
         window.addEventListener('keydown', handleKeyboardShortcuts);
+        window.addEventListener('resize', scheduleViewportLayoutMetricsUpdate);
+        window.addEventListener('orientationchange', scheduleViewportLayoutMetricsUpdate);
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', scheduleViewportLayoutMetricsUpdate);
+            window.visualViewport.addEventListener('scroll', scheduleViewportLayoutMetricsUpdate);
+        }
 
         async function discoverDevices() {
             // Fetch all connected audio and video hardware
