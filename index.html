@@ -3,8 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#202124">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="P2P Meeting">
     <title>P2P Meeting via Secret Key</title>
-    <link rel="icon" href="data:,">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <style>
         :root {
             --app-vh: 100dvh;
@@ -784,7 +790,7 @@
         const sizeBtn = document.getElementById('sizeBtn');
         const appVersionText = document.getElementById('appVersion');
 
-        const APP_VERSION = 'v0.2.3';
+        const APP_VERSION = 'v0.2.4';
 
         const KEYBOARD_SHORTCUTS = {
             call: 'c',
@@ -856,6 +862,24 @@
                 viewportMetricsRafId = 0;
                 updateViewportLayoutMetrics();
             });
+        }
+
+        async function registerPwaServiceWorker() {
+            if (!('serviceWorker' in navigator)) {
+                return;
+            }
+
+            // Service workers require a secure context (HTTPS or localhost).
+            if (!window.isSecureContext) {
+                console.info('PWA install support is disabled on insecure origins. Use HTTPS or localhost.');
+                return;
+            }
+
+            try {
+                await navigator.serviceWorker.register('./sw.js');
+            } catch (err) {
+                console.warn('Service worker registration failed:', err);
+            }
         }
 
         function tryPlayRemoteVideo(reason = 'remote media update') {
@@ -1789,6 +1813,8 @@
         }
 
         window.addEventListener('beforeunload', cleanupRoomOnExit);
+
+        registerPwaServiceWorker();
 
         window.onload = init;
     </script>

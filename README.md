@@ -69,6 +69,27 @@ python -m http.server 8000
 ```
 Then navigate your browser to `http://localhost:8000`.
 
+### 📱 PWA Install Mode (Fullscreen App)
+This project now includes a PWA setup modeled after your working pattern:
+
+* `manifest.json` for app metadata and install prompts.
+* `sw.js` service worker with versioned cache + stale cache cleanup.
+* App icons: `icon.svg`, `icon-192.png`, `icon-512.png`.
+* Mobile app meta tags in `index.html` (`theme-color`, Apple standalone tags).
+
+Important requirements:
+
+1. PWA install only works on secure origins (`https://`) or `http://localhost`.
+2. Opening `index.html` via `file:///` will not provide reliable install behavior.
+3. After deploy/update, refresh once so the latest service worker version is activated.
+
+Install flow:
+
+1. Open the app on `https://...` (or `http://localhost` for local testing).
+2. In Chrome/Edge Android, use **Install app** / **Add to Home screen**.
+3. On iOS Safari, use **Share** -> **Add to Home Screen**.
+4. Launch from the home-screen icon to run without browser controls.
+
 ### ⚠️ Corporate Network Note
 Corporate networks and proxies often intercept outbound CDN scripts (`gstatic.com`) or block streaming UDP traffic entirely. For development on work laptops, make sure you download `firebase-app.js` and `firebase-database.js` locally to your root folder as configured in the scripts. For testing the actual call connection, ensure both devices are connected to less restrictive consumer/home networks.
 
