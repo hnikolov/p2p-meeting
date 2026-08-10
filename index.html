@@ -668,7 +668,7 @@
                 <div class="top-row">
                     <div class="top-center-controls">
                         <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
-                        <button id="callBtn" class="btn-call" title="Call or End (C)">Call</button>
+                        <button id="callBtn" class="btn-call" title="Call or End (Q)">Call</button>
                     </div>
                 </div>
                 <div class="top-row">
@@ -716,14 +716,14 @@
                 <span id="appVersion" class="app-version">vx.x.x</span>
             </div>
             <div class="bottom-card bottom-card-center">
-                <button id="muteBtn" class="btn-control" data-muted="false" title="Mute toggle (M)">Mute</button>
-                <button id="camBtn" class="btn-control" data-off="false" title="Camera toggle (V)">Camera</button>
+                <button id="muteBtn" class="btn-control" data-muted="false" title="Mute toggle (Space)">Mute</button>
+                <button id="camBtn" class="btn-control" data-off="false" title="Camera toggle (C)">Camera off</button>
             </div>
             <div class="bottom-card bottom-card-right">
                 <span class="pip-text">PiP:</span>
-                <button id="moveBtn" class="btn-control btn-pip" type="button" title="Move PiP (P)" disabled>Move</button>
+                <button id="moveBtn" class="btn-control btn-pip" type="button" title="Move PiP (M)" disabled>Move</button>
                 <button id="swapBtn" class="btn-control btn-pip" type="button" title="Swap main/PiP (X)" disabled>Swap</button>
-                <button id="sizeBtn" class="btn-control btn-pip" type="button" title="Cycle PiP size (Z)" disabled>Size</button>
+                <button id="sizeBtn" class="btn-control btn-pip" type="button" title="Cycle PiP size (V)" disabled>Size</button>
             </div>
         </footer>
     </div>
@@ -790,15 +790,18 @@
         const sizeBtn = document.getElementById('sizeBtn');
         const appVersionText = document.getElementById('appVersion');
 
-        const APP_VERSION = 'v0.2.4';
+        const APP_VERSION = 'v0.2.5';
+
+        const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
+        const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 
         const KEYBOARD_SHORTCUTS = {
-            call: 'c',
-            mute: 'm',
-            camera: 'v',
-            move: 'p',
+            call: 'q',
+            mute: 'space',
+            camera: 'c',
+            move: 'm',
             swap: 'x',
-            size: 'z'
+            size: 'v'
         };
 
         const DEVICE_SELECT_REFOCUS_GUARD_MS = 150;
@@ -862,6 +865,63 @@
                 viewportMetricsRafId = 0;
                 updateViewportLayoutMetrics();
             });
+        }
+
+        function persistRoomKey() {
+            try {
+                const roomKeyValue = (roomKeyInput.value || '').trim();
+                if (!roomKeyValue) {
+                    return;
+                }
+
+                localStorage.setItem(ROOM_KEY_STORAGE_KEY, roomKeyValue);
+            } catch {
+                // Ignore storage failures (private mode / blocked storage).
+            }
+        }
+
+        function restoreRoomKey() {
+            try {
+                const savedRoomKey = localStorage.getItem(ROOM_KEY_STORAGE_KEY);
+                if (typeof savedRoomKey === 'string' && savedRoomKey.trim()) {
+                    roomKeyInput.value = savedRoomKey;
+                }
+            } catch {
+                // Ignore storage failures (private mode / blocked storage).
+            }
+        }
+
+        function persistPipLayout() {
+            try {
+                const payload = {
+                    positionIndex: pipViewState.positionIndex,
+                    sizeIndex: pipViewState.sizeIndex
+                };
+                localStorage.setItem(PIP_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+            } catch {
+                // Ignore storage failures (private mode / blocked storage).
+            }
+        }
+
+        function restorePipLayout() {
+            try {
+                const raw = localStorage.getItem(PIP_LAYOUT_STORAGE_KEY);
+                if (!raw) return;
+
+                const parsed = JSON.parse(raw);
+                const positionIndex = Number(parsed && parsed.positionIndex);
+                const sizeIndex = Number(parsed && parsed.sizeIndex);
+
+                if (Number.isInteger(positionIndex) && positionIndex >= 0 && positionIndex < PIP_POSITIONS.length) {
+                    pipViewState.positionIndex = positionIndex;
+                }
+
+                if (Number.isInteger(sizeIndex) && sizeIndex >= 0 && sizeIndex < PIP_SIZES.length) {
+                    pipViewState.sizeIndex = sizeIndex;
+                }
+            } catch {
+                // Ignore invalid / corrupt storage.
+            }
         }
 
         async function registerPwaServiceWorker() {
@@ -1026,8 +1086,11 @@
             muteBtn.classList.toggle('btn-toggle-active', isMuted);
             camBtn.classList.toggle('btn-toggle-active', isCameraOff);
 
-            muteBtn.title = isMuted ? 'Unmute (M)' : 'Mute (M)';
-            camBtn.title = isCameraOff ? 'Turn camera on (V)' : 'Turn camera off (V)';
+            muteBtn.innerText = isMuted ? 'Unmute' : 'Mute';
+            camBtn.innerText = isCameraOff ? 'Camera on' : 'Camera off';
+
+            muteBtn.title = isMuted ? 'Unmute (Space)' : 'Mute (Space)';
+            camBtn.title = isCameraOff ? 'Turn camera on (C)' : 'Turn camera off (C)';
         }
 
         function isTypingIntoControl(target) {
@@ -1046,14 +1109,14 @@
             if (event.altKey || event.ctrlKey || event.metaKey) return;
             if (isTypingIntoControl(event.target)) return;
 
-            const key = event.key.toLowerCase();
+            const key = (event.key || '').toLowerCase();
             if (key === KEYBOARD_SHORTCUTS.call) {
                 event.preventDefault();
                 triggerButton(callBtn);
                 return;
             }
 
-            if (key === KEYBOARD_SHORTCUTS.mute) {
+            if (event.code === 'Space' || key === ' ' || key === 'spacebar') {
                 event.preventDefault();
                 triggerButton(muteBtn);
                 return;
@@ -1258,6 +1321,8 @@
         syncCallButtonMode();
         setDeviceControlsEnabled(false);
         setPipControlsEnabled(false);
+        restoreRoomKey();
+        restorePipLayout();
         updateViewportLayoutMetrics();
         applyPipLayoutState();
         updateToggleButtonVisuals();
@@ -1654,7 +1719,6 @@
                 const isMuted = muteBtn.getAttribute('data-muted') === 'true';
                 audioTracks[0].enabled = isMuted; // Toggle transmission states
                 muteBtn.setAttribute('data-muted', !isMuted);
-                muteBtn.innerText = 'Mute';
                 updateToggleButtonVisuals();
             }
         });
@@ -1668,7 +1732,6 @@
                 const isCamOff = camBtn.getAttribute('data-off') === 'true';
                 videoTracks[0].enabled = isCamOff; // Toggle transmission states
                 camBtn.setAttribute('data-off', !isCamOff);
-                camBtn.innerText = 'Camera';
                 updateToggleButtonVisuals();
             }
         });
@@ -1676,6 +1739,7 @@
         moveBtn.addEventListener('click', () => {
             pipViewState.positionIndex = (pipViewState.positionIndex + 1) % PIP_POSITIONS.length;
             applyPipPosition();
+            persistPipLayout();
         });
 
         swapBtn.addEventListener('click', () => {
@@ -1686,7 +1750,11 @@
         sizeBtn.addEventListener('click', () => {
             pipViewState.sizeIndex = (pipViewState.sizeIndex + 1) % PIP_SIZES.length;
             applyPipSize();
+            persistPipLayout();
         });
+
+        roomKeyInput.addEventListener('input', persistRoomKey);
+        roomKeyInput.addEventListener('change', persistRoomKey);
 
         // Seamless Video Camera Switcher
         videoSource.addEventListener('pointerdown', (event) => {
