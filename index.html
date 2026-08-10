@@ -121,10 +121,17 @@
 
         .top-card-secondary .top-right-controls {
             display: grid;
-            grid-template-columns: 64px 56px 240px;
+            grid-template-columns: 64px 56px minmax(0, 1fr);
             justify-content: end;
             column-gap: 8px;
             align-items: center;
+        }
+
+        .top-card-secondary .top-right-controls .device-select-wrap {
+            width: min(240px, 100%);
+            min-width: 0;
+            max-width: 240px;
+            justify-self: end;
         }
 
         .top-card-secondary .top-right-controls > label.device-label {
@@ -524,6 +531,10 @@
                 width: min(360px, 86vw);
             }
 
+            .top-card-secondary .top-right-controls .device-select-wrap:focus-within .device-select {
+                width: 100%;
+            }
+
             .btn-pip {
                 width: 84px;
                 min-width: 84px;
@@ -591,8 +602,18 @@
                 flex-basis: auto;
             }
 
+            .top-card-secondary .top-right-controls .device-select-wrap {
+                width: 100%;
+                max-width: 240px;
+                justify-self: end;
+            }
+
             .device-select-wrap:focus-within .device-select {
                 width: min(92vw, 320px);
+            }
+
+            .top-card-secondary .top-right-controls .device-select-wrap:focus-within .device-select {
+                width: 100%;
             }
 
             .bottom-bar {
@@ -675,7 +696,7 @@
             }
 
             .device-select-wrap {
-                width: min(250px, 90vw);
+                width: min(100%, 250px);
                 min-width: 0;
                 max-width: none;
                 flex-basis: auto;
@@ -828,7 +849,7 @@
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.7';
+        const APP_VERSION = 'v0.2.8';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
