@@ -121,18 +121,34 @@
 
         .top-card-secondary .top-right-controls {
             display: grid;
-            grid-template-columns: 56px 240px;
+            grid-template-columns: 64px 56px 240px;
             justify-content: end;
             column-gap: 8px;
             align-items: center;
         }
 
-        .top-card-secondary .top-right-controls label {
+        .top-card-secondary .top-right-controls > label.device-label {
             width: 56px;
             min-width: 56px;
             justify-self: end;
             text-align: right;
             white-space: nowrap;
+        }
+
+        .profile-low-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-self: start;
+            gap: 6px;
+            color: #bdc1c6;
+            font-size: 13px;
+            white-space: nowrap;
+            user-select: none;
+        }
+
+        .profile-low-toggle input {
+            margin: 0;
+            accent-color: #1a73e8;
         }
 
         .top-right-controls label {
@@ -550,12 +566,12 @@
             }
 
             .top-card-secondary .top-right-controls {
-                grid-template-columns: 48px minmax(0, 1fr);
+                grid-template-columns: 58px 48px minmax(0, 1fr);
                 justify-content: start;
                 width: 100%;
             }
 
-            .top-card-secondary .top-right-controls label {
+            .top-card-secondary .top-right-controls > label.device-label {
                 width: 48px;
                 min-width: 48px;
             }
@@ -696,7 +712,8 @@
             <div class="top-card top-card-secondary">
                 <div class="top-row">
                     <div class="top-right-controls">
-                        <label for="audioSource">Mic:</label>
+                        <label for="audioProfileLow" class="profile-low-toggle"><input id="audioProfileLow" type="checkbox" checked>Low</label>
+                        <label class="device-label" for="audioSource">Mic:</label>
                         <div class="device-select-wrap">
                             <select id="audioSource" class="device-select"></select>
                         </div>
@@ -705,7 +722,8 @@
 
                 <div class="top-row">
                     <div class="top-right-controls">
-                        <label for="videoSource">Cam:</label>
+                        <label for="videoProfileLow" class="profile-low-toggle"><input id="videoProfileLow" type="checkbox" checked>Low</label>
+                        <label class="device-label" for="videoSource">Cam:</label>
                         <div class="device-select-wrap">
                             <select id="videoSource" class="device-select"></select>
                         </div>
@@ -802,13 +820,15 @@
         const pipCard = document.getElementById('pipCard');
         const audioSource = document.getElementById('audioSource');
         const videoSource = document.getElementById('videoSource');
+        const audioProfileLowToggle = document.getElementById('audioProfileLow');
+        const videoProfileLowToggle = document.getElementById('videoProfileLow');
         const moveBtn = document.getElementById('moveBtn');
         const swapBtn = document.getElementById('swapBtn');
         const sizeBtn = document.getElementById('sizeBtn');
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.6';
+        const APP_VERSION = 'v0.2.7';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
@@ -893,6 +913,139 @@
             if (reset) {
                 elapsedTimerStartedAt = 0;
                 setElapsedTimeMs(0);
+            }
+        }
+
+        function isLowAudioProfileEnabled() {
+            return !audioProfileLowToggle || audioProfileLowToggle.checked;
+        }
+
+        function isLowVideoProfileEnabled() {
+            return !videoProfileLowToggle || videoProfileLowToggle.checked;
+        }
+
+        function buildVideoConstraints(deviceId = null) {
+            const constraints = isLowVideoProfileEnabled()
+                ? {
+                    width: { ideal: 640, max: 640 },
+                    height: { ideal: 480, max: 480 },
+                    frameRate: { ideal: 15, max: 15 }
+                }
+                : {
+                    width: { ideal: 800, max: 800 },
+                    height: { ideal: 600, max: 600 },
+                    frameRate: { ideal: 15, max: 15 }
+                };
+
+            if (deviceId) {
+                constraints.deviceId = { exact: deviceId };
+            }
+
+            return constraints;
+        }
+
+        function buildAudioConstraints(deviceId = null, fallback = false) {
+            const constraints = isLowAudioProfileEnabled()
+                ? {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+                : {
+                    echoCancellation: true,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                    channelCount: { ideal: 2 },
+                    sampleRate: { ideal: 48000 },
+                    sampleSize: { ideal: 16 }
+                };
+
+            if (!isLowAudioProfileEnabled() && fallback) {
+                delete constraints.channelCount;
+                delete constraints.sampleRate;
+                delete constraints.sampleSize;
+            }
+
+            if (deviceId) {
+                constraints.deviceId = { exact: deviceId };
+            }
+
+            return constraints;
+        }
+
+        async function getAudioInputStream(deviceId = null) {
+            const primaryConstraints = buildAudioConstraints(deviceId, false);
+
+            try {
+                return await navigator.mediaDevices.getUserMedia({ audio: primaryConstraints });
+            } catch (err) {
+                if (isLowAudioProfileEnabled()) {
+                    throw err;
+                }
+
+                const fallbackConstraints = buildAudioConstraints(deviceId, true);
+                return await navigator.mediaDevices.getUserMedia({ audio: fallbackConstraints });
+            }
+        }
+
+        async function applyVideoSourceById(videoDeviceId = null) {
+            if (!localStream) return;
+
+            const newStream = await navigator.mediaDevices.getUserMedia({
+                video: buildVideoConstraints(videoDeviceId)
+            });
+
+            const newVideoTrack = newStream.getVideoTracks()[0];
+            const oldVideoTrack = localStream.getVideoTracks()[0];
+
+            if (!newVideoTrack) {
+                throw new Error('No video track returned for selected profile.');
+            }
+
+            if (oldVideoTrack) {
+                localStream.removeTrack(oldVideoTrack);
+                oldVideoTrack.stop();
+            }
+
+            localStream.addTrack(newVideoTrack);
+            localVideo.srcObject = localStream;
+
+            if (peerConnection) {
+                const senders = peerConnection.getSenders();
+                const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+                if (videoSender) {
+                    await videoSender.replaceTrack(newVideoTrack);
+                }
+            }
+        }
+
+        async function applyAudioSourceById(audioDeviceId = null) {
+            if (!localStream) return;
+
+            const newStream = await getAudioInputStream(audioDeviceId);
+            const newAudioTrack = newStream.getAudioTracks()[0];
+            const oldAudioTrack = localStream.getAudioTracks()[0];
+
+            if (!newAudioTrack) {
+                throw new Error('No audio track returned for selected profile.');
+            }
+
+            const isCurrentlyMuted = muteBtn.getAttribute('data-muted') === 'true';
+            newAudioTrack.enabled = !isCurrentlyMuted;
+
+            if (oldAudioTrack) {
+                localStream.removeTrack(oldAudioTrack);
+                oldAudioTrack.stop();
+            }
+
+            localStream.addTrack(newAudioTrack);
+
+            if (peerConnection) {
+                const senders = peerConnection.getSenders();
+                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                if (audioSender) {
+                    await audioSender.replaceTrack(newAudioTrack);
+                }
             }
         }
 
@@ -1430,22 +1583,26 @@
         // Step 1: Open Local Hardware Feed
         async function init() {
             try {
-                // Optimized media constraints for maximum audio stability
+                // Capture media using the selected speech/music + low/high video profiles.
                 const constraints = { 
-                    video: {
-                        width: { ideal: 640, max: 640 },
-                        height: { ideal: 480, max: 480 },
-                        frameRate: { ideal: 15, max: 15 } // Cuts video data transmission in half
-                    }, 
-                    audio: {
-                        echoCancellation: true, // Prevents feedback loops
-                        noiseSuppression: true, // Filters background hums
-                        autoGainControl: true // Prevents clipping if you speak too loudly
-                    }
+                    video: buildVideoConstraints(),
+                    audio: buildAudioConstraints()
                 };
 
-                // Request hardware access first (triggers browser permission pop-up)
-                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (err) {
+                    if (isLowAudioProfileEnabled()) {
+                        throw err;
+                    }
+
+                    // Music profile fallback for browsers/drivers rejecting advanced hints.
+                    localStream = await navigator.mediaDevices.getUserMedia({
+                        video: buildVideoConstraints(),
+                        audio: buildAudioConstraints(null, true)
+                    });
+                }
+
                 localVideo.srcObject = localStream;
 
                 // Scan the available hardware and populate your dropdown menus
@@ -1849,33 +2006,7 @@
             if (!videoDeviceId) return;
 
             try {
-                // Capture new camera using your lightweight bandwidth constraints
-                const newStream = await navigator.mediaDevices.getUserMedia({
-                    video: { 
-                        deviceId: { exact: videoDeviceId }, 
-                        width: { ideal: 640, max: 640 }, 
-                        height: { ideal: 480, max: 480 }, 
-                        frameRate: { ideal: 15, max: 15 } 
-                    }
-                });
-                
-                const newVideoTrack = newStream.getVideoTracks()[0];
-                const oldVideoTrack = localStream.getVideoTracks()[0];
-
-                // Swap the track in your local camera preview window
-                localStream.removeTrack(oldVideoTrack);
-                oldVideoTrack.stop(); // Turn off the old camera hardware to save battery
-                localStream.addTrack(newVideoTrack);
-                localVideo.srcObject = localStream;
-
-                // Seamlessly hot-swap the video track across the live connection to your friend
-                if (peerConnection) {
-                    const senders = peerConnection.getSenders();
-                    const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-                    if (videoSender) {
-                        await videoSender.replaceTrack(newVideoTrack);
-                    }
-                }
+                await applyVideoSourceById(videoDeviceId);
             } catch (err) {
                 console.error("Failed to switch camera source:", err);
                 alert("Could not switch to the selected camera hardware.");
@@ -1901,39 +2032,32 @@
             if (!audioDeviceId) return;
 
             try {
-                // Capture new microphone using your echo/noise audio filters
-                const newStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { 
-                        deviceId: { exact: audioDeviceId },
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
-                    }
-                });
-                
-                const newAudioTrack = newStream.getAudioTracks()[0];
-                const oldAudioTrack = localStream.getAudioTracks()[0];
-
-                // If your mute button is currently active, ensure the new track matches that state
-                const isCurrentlyMuted = muteBtn.getAttribute('data-muted') === 'true';
-                newAudioTrack.enabled = !isCurrentlyMuted;
-
-                // Swap the track in your local processing memory
-                localStream.removeTrack(oldAudioTrack);
-                oldAudioTrack.stop(); // Shut down old microphone hardware processing
-                localStream.addTrack(newAudioTrack);
-
-                // Seamlessly hot-swap the audio track across the live connection to your friend
-                if (peerConnection) {
-                    const senders = peerConnection.getSenders();
-                    const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-                    if (audioSender) {
-                        await audioSender.replaceTrack(newAudioTrack);
-                    }
-                }
+                await applyAudioSourceById(audioDeviceId);
             } catch (err) {
                 console.error("Failed to switch microphone source:", err);
                 alert("Could not switch to the selected microphone hardware.");
+            }
+        });
+
+        audioProfileLowToggle.addEventListener('change', async () => {
+            if (!localStream) return;
+
+            try {
+                await applyAudioSourceById(audioSource.value || null);
+            } catch (err) {
+                console.error('Failed to apply audio profile:', err);
+                alert('Could not apply the selected audio profile.');
+            }
+        });
+
+        videoProfileLowToggle.addEventListener('change', async () => {
+            if (!localStream) return;
+
+            try {
+                await applyVideoSourceById(videoSource.value || null);
+            } catch (err) {
+                console.error('Failed to apply video profile:', err);
+                alert('Could not apply the selected video profile.');
             }
         });
 
