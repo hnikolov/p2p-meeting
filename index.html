@@ -94,6 +94,22 @@
             min-width: 0;
         }
 
+        .elapsed-time {
+            width: 88px;
+            min-width: 88px;
+            height: 40px;
+            border: 1px solid #5f6368;
+            border-radius: 4px;
+            background: #202124;
+            color: #e8eaed;
+            font-size: 14px;
+            font-variant-numeric: tabular-nums;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+
         .top-right-controls {
             display: flex;
             align-items: center;
@@ -147,7 +163,7 @@
         }
 
         #roomKey {
-            width: min(460px, 60vw);
+            width: min(350px, 42vw);
         }
 
         select {
@@ -667,6 +683,7 @@
             <div class="top-card top-card-primary">
                 <div class="top-row">
                     <div class="top-center-controls">
+                        <span id="elapsedTime" class="elapsed-time" title="Elapsed time">0:00:00</span>
                         <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
                         <button id="callBtn" class="btn-call" title="Call or End (Q)">Call</button>
                     </div>
@@ -789,8 +806,9 @@
         const swapBtn = document.getElementById('swapBtn');
         const sizeBtn = document.getElementById('sizeBtn');
         const appVersionText = document.getElementById('appVersion');
+        const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.5';
+        const APP_VERSION = 'v0.2.6';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
@@ -833,6 +851,50 @@
         };
 
         let viewportMetricsRafId = 0;
+        let elapsedTimerId = 0;
+        let elapsedTimerStartedAt = 0;
+
+        function formatElapsedTime(ms) {
+            const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        function setElapsedTimeMs(ms) {
+            if (!elapsedTimeText) return;
+            elapsedTimeText.innerText = formatElapsedTime(ms);
+        }
+
+        function startElapsedTimer({ reset = false } = {}) {
+            if (reset) {
+                elapsedTimerStartedAt = Date.now();
+                setElapsedTimeMs(0);
+            } else if (!elapsedTimerStartedAt) {
+                elapsedTimerStartedAt = Date.now();
+            }
+
+            if (elapsedTimerId) {
+                clearInterval(elapsedTimerId);
+            }
+
+            elapsedTimerId = setInterval(() => {
+                setElapsedTimeMs(Date.now() - elapsedTimerStartedAt);
+            }, 250);
+        }
+
+        function stopElapsedTimer({ reset = false } = {}) {
+            if (elapsedTimerId) {
+                clearInterval(elapsedTimerId);
+                elapsedTimerId = 0;
+            }
+
+            if (reset) {
+                elapsedTimerStartedAt = 0;
+                setElapsedTimeMs(0);
+            }
+        }
 
         function updateViewportLayoutMetrics() {
             const visualViewport = window.visualViewport;
@@ -1269,6 +1331,7 @@
         }
 
         async function resetCallSession(statusMessage) {
+            stopElapsedTimer({ reset: true });
             clearJoinTimeout();
             unsubscribeRoomListeners();
             closePeerConnection();
@@ -1321,6 +1384,7 @@
         syncCallButtonMode();
         setDeviceControlsEnabled(false);
         setPipControlsEnabled(false);
+        setElapsedTimeMs(0);
         restoreRoomKey();
         restorePipLayout();
         updateViewportLayoutMetrics();
@@ -1541,6 +1605,7 @@
                 await publishOwnPresence(roomName);
 
                 statusText.innerText = `Room "${roomName}" created. Waiting for friend to join...`;
+                startElapsedTimer({ reset: true });
             } catch (err) {
                 console.error('Failed to start room:', err);
                 await resetCallSession('Could not create the room. Check Firebase connectivity and try again.');
@@ -1549,6 +1614,9 @@
 
         async function beginJoinRoom(roomName, autoDetected = false) {
             if (!ensureLocalStreamReady()) return;
+
+            // Joining side starts timing from user action.
+            startElapsedTimer({ reset: true });
 
             activeRoomName = roomName;
             localParticipantRole = 'callee';
@@ -1698,7 +1766,13 @@
             const unsubscribeRemotePresence = onValue(ref(db, remotePresencePath), async (snapshot) => {
                 const remotePresence = snapshot.val();
                 if (remotePresence && remotePresence.sessionId === activeSessionId) {
+                    const peerJoinedForFirstTime = !remotePresenceSeen;
                     remotePresenceSeen = true;
+
+                    // Caller side: waiting timer switches to call-duration timer on peer join.
+                    if (peerJoinedForFirstTime && localParticipantRole === 'caller') {
+                        startElapsedTimer({ reset: true });
+                    }
                     return;
                 }
 
