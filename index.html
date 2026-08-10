@@ -78,6 +78,10 @@
             min-width: 320px;
         }
 
+        .top-card-secondary .top-row {
+            grid-template-columns: 1fr;
+        }
+
         .top-row {
             display: grid;
             grid-template-columns: auto 1fr;
@@ -128,7 +132,7 @@
         }
 
         .top-card-secondary .top-right-controls .device-select-wrap {
-            width: min(240px, 100%);
+            width: 100%;
             min-width: 0;
             max-width: 240px;
             justify-self: end;
@@ -195,11 +199,7 @@
 
         .device-select-wrap {
             position: relative;
-            width: 240px;
-            min-width: 240px;
-            max-width: 240px;
             height: 40px;
-            flex: 0 0 240px;
             overflow: visible;
         }
 
@@ -222,6 +222,10 @@
         .device-select-wrap:focus-within .device-select {
             width: min(420px, 52vw);
             z-index: 9;
+        }
+
+        .top-card-secondary .top-right-controls .device-select-wrap:focus-within .device-select {
+            width: 100%;
         }
 
         button {
@@ -520,21 +524,6 @@
                 min-width: 100px;
             }
 
-            .device-select-wrap {
-                width: 240px;
-                min-width: 240px;
-                max-width: 240px;
-                flex-basis: 240px;
-            }
-
-            .device-select-wrap:focus-within .device-select {
-                width: min(360px, 86vw);
-            }
-
-            .top-card-secondary .top-right-controls .device-select-wrap:focus-within .device-select {
-                width: 100%;
-            }
-
             .btn-pip {
                 width: 84px;
                 min-width: 84px;
@@ -592,27 +581,6 @@
             }
 
             #roomKey {
-                width: 100%;
-            }
-
-            .device-select-wrap {
-                width: min(100%, 280px);
-                min-width: 0;
-                max-width: none;
-                flex-basis: auto;
-            }
-
-            .top-card-secondary .top-right-controls .device-select-wrap {
-                width: 100%;
-                max-width: 240px;
-                justify-self: end;
-            }
-
-            .device-select-wrap:focus-within .device-select {
-                width: min(92vw, 320px);
-            }
-
-            .top-card-secondary .top-right-controls .device-select-wrap:focus-within .device-select {
                 width: 100%;
             }
 
@@ -693,17 +661,6 @@
             .btn-control {
                 width: 92px;
                 min-width: 92px;
-            }
-
-            .device-select-wrap {
-                width: min(100%, 250px);
-                min-width: 0;
-                max-width: none;
-                flex-basis: auto;
-            }
-
-            .device-select-wrap:focus-within .device-select {
-                width: min(320px, 90vw);
             }
 
             .btn-pip {
@@ -849,7 +806,7 @@
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.8';
+        const APP_VERSION = 'v0.2.9';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
