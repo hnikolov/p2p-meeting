@@ -806,10 +806,12 @@
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.9';
+        const APP_VERSION = 'v0.2.10';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
+        const AUDIO_BITRATE_SPEECH_BPS = 32000;
+        const AUDIO_BITRATE_MUSIC_BPS = 256000;
 
         const KEYBOARD_SHORTCUTS = {
             call: 'q',
@@ -910,9 +912,9 @@
                     frameRate: { ideal: 15, max: 15 }
                 }
                 : {
-                    width: { ideal: 800, max: 800 },
-                    height: { ideal: 600, max: 600 },
-                    frameRate: { ideal: 15, max: 15 }
+                    width: { ideal: 1280, max: 1280 },
+                    height: { ideal: 720, max: 720 },
+                    frameRate: { ideal: 20, max: 20 }
                 };
 
             if (deviceId) {
@@ -949,6 +951,110 @@
             }
 
             return constraints;
+        }
+
+        function getPreferredAudioBitrateBps() {
+            return isLowAudioProfileEnabled() ? AUDIO_BITRATE_SPEECH_BPS : AUDIO_BITRATE_MUSIC_BPS;
+        }
+
+        function applyAudioSenderEncodingPreferences(audioSender) {
+            if (!audioSender || typeof audioSender.getParameters !== 'function' || typeof audioSender.setParameters !== 'function') {
+                return;
+            }
+
+            const preferredBitrateBps = getPreferredAudioBitrateBps();
+            if (!Number.isFinite(preferredBitrateBps) || preferredBitrateBps <= 0) {
+                return;
+            }
+
+            let audioParameters;
+            try {
+                audioParameters = audioSender.getParameters() || {};
+            } catch (err) {
+                console.warn('Audio sender parameters are unavailable:', err);
+                return;
+            }
+
+            audioParameters.encodings = Array.isArray(audioParameters.encodings) && audioParameters.encodings.length > 0
+                ? audioParameters.encodings.map(encoding => ({
+                    ...encoding,
+                    priority: 'high',
+                    maxBitrate: preferredBitrateBps
+                }))
+                : [{ priority: 'high', maxBitrate: preferredBitrateBps }];
+
+            audioSender.setParameters(audioParameters)
+                .catch(err => console.warn('Audio sender bitrate tuning skipped by browser:', err));
+        }
+
+        function applyOpusMaxAverageBitrateToSdp(sdp, bitrateBps) {
+            if (typeof sdp !== 'string' || !sdp.trim()) {
+                return sdp;
+            }
+
+            if (!Number.isFinite(bitrateBps) || bitrateBps <= 0) {
+                return sdp;
+            }
+
+            const newline = sdp.includes('\r\n') ? '\r\n' : '\n';
+            const hasTrailingNewline = sdp.endsWith('\r\n') || sdp.endsWith('\n');
+            const lines = sdp.split(/\r?\n/);
+
+            const opusLineIndex = lines.findIndex(line => /^a=rtpmap:(\d+)\s+opus\/48000/i.test(line));
+            if (opusLineIndex < 0) {
+                return sdp;
+            }
+
+            const opusMatch = lines[opusLineIndex].match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
+            if (!opusMatch || !opusMatch[1]) {
+                return sdp;
+            }
+
+            const opusPayloadType = opusMatch[1];
+            const fmtpPrefix = `a=fmtp:${opusPayloadType}`;
+            const fmtpLineIndex = lines.findIndex(line => line.startsWith(fmtpPrefix));
+
+            if (fmtpLineIndex >= 0) {
+                if (/maxaveragebitrate=\d+/i.test(lines[fmtpLineIndex])) {
+                    lines[fmtpLineIndex] = lines[fmtpLineIndex].replace(/maxaveragebitrate=\d+/i, `maxaveragebitrate=${bitrateBps}`);
+                } else {
+                    lines[fmtpLineIndex] = `${lines[fmtpLineIndex]};maxaveragebitrate=${bitrateBps}`;
+                }
+            } else {
+                lines.splice(opusLineIndex + 1, 0, `${fmtpPrefix} maxaveragebitrate=${bitrateBps}`);
+            }
+
+            const updatedSdp = lines.join(newline);
+            return hasTrailingNewline ? `${updatedSdp}${newline}` : updatedSdp;
+        }
+
+        async function setLocalDescriptionWithAudioTuning(peerConn, description) {
+            if (!peerConn || !description) {
+                throw new Error('Peer connection and description are required.');
+            }
+
+            const preferredBitrateBps = getPreferredAudioBitrateBps();
+            if (!description.sdp || !Number.isFinite(preferredBitrateBps) || preferredBitrateBps <= 0) {
+                await peerConn.setLocalDescription(description);
+                return peerConn.localDescription || description;
+            }
+
+            const tunedSdp = applyOpusMaxAverageBitrateToSdp(description.sdp, preferredBitrateBps);
+            if (tunedSdp === description.sdp) {
+                await peerConn.setLocalDescription(description);
+                return peerConn.localDescription || description;
+            }
+
+            const tunedDescription = { type: description.type, sdp: tunedSdp };
+
+            try {
+                await peerConn.setLocalDescription(tunedDescription);
+                return peerConn.localDescription || tunedDescription;
+            } catch (err) {
+                console.warn('SDP bitrate tuning was rejected, using original SDP:', err);
+                await peerConn.setLocalDescription(description);
+                return peerConn.localDescription || description;
+            }
         }
 
         async function getAudioInputStream(deviceId = null) {
@@ -1023,6 +1129,7 @@
                 const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
                 if (audioSender) {
                     await audioSender.replaceTrack(newAudioTrack);
+                    applyAudioSenderEncodingPreferences(audioSender);
                 }
             }
         }
@@ -1618,11 +1725,7 @@
 
             if (audioTrack) {
                 const audioSender = peerConnection.addTrack(audioTrack, localStream);
-                const audioParameters = audioSender.getParameters();
-                audioParameters.encodings = audioParameters.encodings && audioParameters.encodings.length > 0
-                    ? audioParameters.encodings.map(encoding => ({ ...encoding, priority: 'high' }))
-                    : [{ priority: 'high' }];
-                audioSender.setParameters(audioParameters).catch(err => console.error('Audio sender parameter error:', err));
+                applyAudioSenderEncodingPreferences(audioSender);
             }
 
             if (videoTrack) {
@@ -1728,13 +1831,13 @@
                 listenToRoom(roomName);
 
                 const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
+                const localOfferDescription = await setLocalDescriptionWithAudioTuning(peerConnection, offer);
 
                 // Write the local connection configurations to the secret database cluster
                 const offerRef = ref(db, `rooms/${roomName}/offer`);
                 await set(offerRef, {
                     sessionId: activeSessionId,
-                    sdp: { type: offer.type, sdp: offer.sdp }
+                    sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
                 });
 
                 await publishOwnPresence(roomName);
@@ -1870,12 +1973,12 @@
                         clearJoinTimeout();
                         statusText.innerText = 'Processing call invitation...';
                         const answer = await peerConnection.createAnswer();
-                        await peerConnection.setLocalDescription(answer);
+                        const localAnswerDescription = await setLocalDescriptionWithAudioTuning(peerConnection, answer);
 
                         const answerRef = ref(db, `rooms/${roomName}/answer`);
                         await set(answerRef, {
                             sessionId: activeSessionId,
-                            sdp: { type: answer.type, sdp: answer.sdp }
+                            sdp: { type: localAnswerDescription.type, sdp: localAnswerDescription.sdp }
                         });
                         statusText.innerText = 'Answer transmitted. Syncing streams...';
                     }
