@@ -806,7 +806,7 @@
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.11';
+        const APP_VERSION = 'v0.2.12';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
@@ -894,6 +894,102 @@
                 elapsedTimerStartedAt = 0;
                 setElapsedTimeMs(0);
             }
+        }
+
+        const videoStatusTrackers = {
+            main: { labelEl: mainVideoLabel, videoEl: remoteVideo, baseText: 'Friend (Remote)', rafId: 0 },
+            pip: { labelEl: pipVideoLabel, videoEl: localVideo, baseText: 'You (Local)', rafId: 0 }
+        };
+
+        function syncVideoTrackLabel(cardKey, videoEl, baseText) {
+            const tracker = videoStatusTrackers[cardKey];
+            if (!tracker) return;
+
+            tracker.videoEl = videoEl;
+            tracker.baseText = baseText;
+
+            if (tracker.labelEl) {
+                tracker.labelEl.innerText = `${baseText}: ? x ?`;
+            }
+        }
+
+        function updateVideoTrackLabelState(cardKey) {
+            const tracker = videoStatusTrackers[cardKey];
+            if (!tracker || !tracker.labelEl || !tracker.videoEl) return;
+
+            const { videoEl } = tracker;
+            const windowWidth = Math.max(0, Math.round(videoEl.clientWidth || 0));
+            const windowHeight = Math.max(0, Math.round(videoEl.clientHeight || 0));
+            const streamWidth = Math.max(0, Math.round(videoEl.videoWidth || 0));
+            const streamHeight = Math.max(0, Math.round(videoEl.videoHeight || 0));
+
+            const renderedWidthText = windowWidth > 0 ? windowWidth : '?';
+            const renderedHeightText = windowHeight > 0 ? windowHeight : '?';
+            const streamWidthText = streamWidth > 0 ? streamWidth : '?';
+            const streamHeightText = streamHeight > 0 ? streamHeight : '?';
+
+            tracker.labelEl.innerText = `${tracker.baseText}: ${renderedWidthText} x ${renderedHeightText} (${streamWidthText} x ${streamHeightText})`;
+        }
+
+        function startVideoTrackTelemetry() {
+            Object.keys(videoStatusTrackers).forEach((cardKey) => {
+                const tracker = videoStatusTrackers[cardKey];
+                if (!tracker) return;
+
+                if (tracker.rafId) {
+                    cancelAnimationFrame(tracker.rafId);
+                }
+
+                const tick = () => {
+                    updateVideoTrackLabelState(cardKey);
+                    tracker.rafId = requestAnimationFrame(tick);
+                };
+
+                tick();
+            });
+        }
+
+        startVideoTrackTelemetry();
+
+        function getVideoCapabilityLabel() {
+            const track = localStream && localStream.getVideoTracks ? localStream.getVideoTracks()[0] : null;
+            if (!track || typeof track.getCapabilities !== 'function') {
+                return '';
+            }
+
+            const caps = track.getCapabilities();
+            const width = Number(caps && caps.width && caps.width.max ? caps.width.max : 0) || 0;
+            const height = Number(caps && caps.height && caps.height.max ? caps.height.max : 0) || 0;
+
+            if (!width || !height) {
+                return '';
+            }
+
+            return `(${width}x${height})`;
+        }
+
+        function updateCameraCapabilityText() {
+            if (!videoCapabilityText) return;
+            videoCapabilityText.textContent = getVideoCapabilityLabel();
+        }
+
+        function getAudioCapabilityLabel() {
+            const track = localStream && localStream.getAudioTracks ? localStream.getAudioTracks()[0] : null;
+            if (!track || typeof track.getCapabilities !== 'function') {
+                return '';
+            }
+
+            const caps = track.getCapabilities();
+            const channelCount = Number(caps && caps.channelCount && caps.channelCount.max ? caps.channelCount.max : 0) || 0;
+            const sampleRate = Number(caps && caps.sampleRate && caps.sampleRate.max ? caps.sampleRate.max : 0) || 0;
+
+            if (!channelCount && !sampleRate) {
+                return '';
+            }
+
+            const channels = channelCount > 0 ? channelCount : '?';
+            const rateText = sampleRate > 0 ? `${Math.round(sampleRate / 1000)}K` : '?';
+            return `(${channels}, ${rateText})`;
         }
 
         function isLowAudioProfileEnabled() {
@@ -1356,8 +1452,8 @@
                     pipVideoHost.appendChild(localVideo);
                 }
 
-                mainVideoLabel.innerText = 'Friend (Remote)';
-                pipVideoLabel.innerText = 'You (Local)';
+                syncVideoTrackLabel('main', remoteVideo, 'Friend (Remote)');
+                syncVideoTrackLabel('pip', localVideo, 'You (Local)');
                 localVideo.muted = true;
             } else {
                 if (mainVideoHost.firstElementChild !== localVideo) {
@@ -1367,8 +1463,8 @@
                     pipVideoHost.appendChild(remoteVideo);
                 }
 
-                mainVideoLabel.innerText = 'You (Local)';
-                pipVideoLabel.innerText = 'Friend (Remote)';
+                syncVideoTrackLabel('main', localVideo, 'You (Local)');
+                syncVideoTrackLabel('pip', remoteVideo, 'Friend (Remote)');
                 localVideo.muted = true;
             }
 
