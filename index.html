@@ -180,15 +180,11 @@ body {
 #roomHeaderCard {
   border: 1px solid #3c4043;
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 8px 8px;
   background: #303134;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-#roomHeaderCard .bottom-card {
-  width: 100%;
-  justify-content: center;
+  gap: 8px;
 }
 
 /* Device Selector Pop-up Card styling */
@@ -349,22 +345,12 @@ button {
 }
 
 /* Responsiveness Rules for Mid-Sized Viewports */
-@media (max-width: 1100px) and (orientation: landscape) {
+@media (max-width: 1130px) and (orientation: landscape) {
   .bottom-bar {
     justify-content: center;
   }
   .bottom-card {
-    flex-grow: 1;
     justify-content: center;
-  }
-}
-
-@media (max-width: 980px) and (orientation: landscape) {
-  .bottom-bar {
-    gap: 8px;
-  }
-  #roomKey {
-    width: 100%;
   }
 }
 
@@ -402,7 +388,7 @@ button {
     order: 2;
   }
   
-  /* Removed 'display: flex;' so the card stays hidden until [^] is clicked */
+  /* No 'display: flex;' so the card stays hidden until [^] is clicked */
   .device-selector-card {
     position: static;
     transform: none;
@@ -474,6 +460,20 @@ button {
     text-align: center;
     width: 100%;
   }
+  #roomHeaderCard .bottom-card {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: nowrap !important; /* Prevents the call button from dropping down */
+    gap: 8px; /* Slightly tighter spacing for small mobile screens */
+    padding: 8px;
+  }
+
+  /* REMOVE THE 100% WIDTH AND FORCE AUTOMATIC SHRINKING */
+  #roomHeaderCard #roomKey {
+    width: 100% !important; /* Allows it to occupy remaining space */
+    min-width: 80px !important; /* Safety floor: lets it shrink very small if needed */
+    flex-shrink: 1 !important; /* Actively scales down on tight viewports */
+  }  
 }
 </style>
 </head>
@@ -651,7 +651,7 @@ button {
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.13';
+        const APP_VERSION = 'v0.3.0';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';

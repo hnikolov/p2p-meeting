@@ -1,4 +1,4 @@
-const CACHE_NAME = 'p2p-meeting-v0.2.13';
+const CACHE_NAME = 'p2p-meeting-v0.3.0';
 const ASSETS = [
   './',
   './index.html',
