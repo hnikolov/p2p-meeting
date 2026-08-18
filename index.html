@@ -1,748 +1,593 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#202124">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="P2P Meeting">
-    <title>P2P Meeting via Secret Key</title>
-    <link rel="manifest" href="manifest.json">
-    <link rel="icon" href="icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="icon-192.png">
-    <style>
-        :root {
-            --app-vh: 100dvh;
-            --safe-top: env(safe-area-inset-top, 0px);
-            --safe-right: env(safe-area-inset-right, 0px);
-            --safe-bottom: env(safe-area-inset-bottom, 0px);
-            --safe-left: env(safe-area-inset-left, 0px);
-            --pip-btn-width: 80px;
-            --main-btn-width: 94px;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: sans-serif;
-            background: #202124;
-            color: white;
-            margin: 0;
-            padding: calc(12px + var(--safe-top)) calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left));
-            height: var(--app-vh);
-            min-height: var(--app-vh);
-            overflow: hidden;
-        }
-
-        .app-shell {
-            width: 100%;
-            max-width: 1300px;
-            margin: 0 auto;
-            height: 100%;
-            display: grid;
-            grid-template-rows: auto minmax(0, 1fr) auto;
-            gap: 10px;
-        }
-
-        .top-panel {
-            background: #303134;
-            border: 1px solid #3c4043;
-            border-radius: 10px;
-            padding: 10px 12px;
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 10px;
-            align-items: stretch;
-        }
-
-        .top-card {
-            min-width: 0;
-            border: 1px solid #3c4043;
-            border-radius: 8px;
-            padding: 8px 10px;
-            background: #202124;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .top-card-primary {
-            justify-content: center;
-        }
-
-        .top-card-secondary {
-            justify-content: center;
-            min-width: 320px;
-        }
-
-        .top-card-secondary .top-row {
-            grid-template-columns: 1fr;
-        }
-
-        .top-row {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 12px;
-            align-items: center;
-            min-height: 38px;
-        }
-
-        .top-center-controls {
-            display: flex;
-            align-items: center;
-            justify-content: flex-start;
-            gap: 10px;
-            min-width: 0;
-        }
-
-        .elapsed-time {
-            width: 88px;
-            min-width: 88px;
-            height: 40px;
-            border: 1px solid #5f6368;
-            border-radius: 4px;
-            background: #202124;
-            color: #e8eaed;
-            font-size: 14px;
-            font-variant-numeric: tabular-nums;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            user-select: none;
-        }
-
-        .top-right-controls {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            min-width: 0;
-            width: 100%;
-        }
-
-        .top-card-secondary .top-right-controls {
-            display: grid;
-            grid-template-columns: 64px 56px minmax(0, 1fr);
-            justify-content: end;
-            column-gap: 8px;
-            align-items: center;
-        }
-
-        .top-card-secondary .top-right-controls .device-select-wrap {
-            width: 100%;
-            min-width: 0;
-            max-width: 240px;
-            justify-self: end;
-        }
-
-        .top-card-secondary .top-right-controls > label.device-label {
-            width: 56px;
-            min-width: 56px;
-            justify-self: end;
-            text-align: right;
-            white-space: nowrap;
-        }
-
-        .profile-low-toggle {
-            display: inline-flex;
-            align-items: center;
-            justify-self: start;
-            gap: 6px;
-            color: #bdc1c6;
-            font-size: 13px;
-            white-space: nowrap;
-            user-select: none;
-        }
-
-        .profile-low-toggle input {
-            margin: 0;
-            accent-color: #1a73e8;
-        }
-
-        .top-right-controls label {
-            font-size: 13px;
-            color: #bdc1c6;
-            white-space: nowrap;
-        }
-
-        .status-bar {
-            margin: 0;
-            font-size: 14px;
-            color: #aecbfa;
-            font-weight: bold;
-            text-align: left;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        input,
-        select {
-            padding: 10px 12px;
-            border-radius: 4px;
-            border: 1px solid #5f6368;
-            background: #202124;
-            color: white;
-            font-size: 14px;
-        }
-
-        #roomKey {
-            width: min(350px, 42vw);
-        }
-
-        select {
-            min-width: 0;
-        }
-
-        .device-select-wrap {
-            position: relative;
-            height: 40px;
-            overflow: visible;
-        }
-
-        .device-select {
-            position: absolute;
-            right: 0;
-            top: 0;
-            width: 100%;
-            height: 40px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            z-index: 1;
-        }
-
-        .device-select-wrap:focus-within {
-            z-index: 8;
-        }
-
-        .device-select-wrap:focus-within .device-select {
-            width: min(420px, 52vw);
-            z-index: 9;
-        }
-
-        .top-card-secondary .top-right-controls .device-select-wrap:focus-within .device-select {
-            width: 100%;
-        }
-
-        button {
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
-            color: white;
-            transition: background 0.2s;
-            padding: 10px 14px;
-            white-space: nowrap;
-        }
-
-        #callBtn {
-            width: 110px;
-            min-width: 110px;
-        }
-
-        .btn-call { background: #1a73e8; }
-        .btn-call:hover { background: #1557b0; }
-        .btn-call-disconnect { background: #fbbc04; color: #202124; }
-        .btn-call-disconnect:hover { background: #f9ab00; }
-
-        .video-stage {
-            position: relative;
-            width: 100%;
-            min-height: 0;
-            height: 100%;
-            background: #000;
-            border: 2px solid #3c4043;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-
-        .main-video-host {
-            width: 100%;
-            height: 100%;
-        }
-
-        .main-video-host video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            background: #000;
-        }
-
-        #remoteVideo {
-            transform: none;
-        }
-
-        .pip-card {
-            position: absolute;
-            right: 16px;
-            bottom: 16px;
-            width: min(24vw, 320px);
-            min-width: 190px;
-            aspect-ratio: 4 / 3;
-            border: 2px solid #3c4043;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #000;
-            transition: top 0.18s ease, right 0.18s ease, bottom 0.18s ease, left 0.18s ease, transform 0.18s ease, width 0.18s ease;
-        }
-
-        .pip-video-host {
-            width: 100%;
-            height: 100%;
-        }
-
-        .pip-video-host video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            background: #000;
-        }
-
-        #localVideo {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transform: scaleX(-1);
-            background: #000;
-        }
-
-        .video-label {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            background: rgba(0,0,0,0.6);
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-
-        .remote-label {
-            z-index: 2;
-        }
-
-        .bottom-bar {
-            background: #303134;
-            border: 1px solid #3c4043;
-            border-radius: 10px;
-            padding: 8px 12px;
-            display: grid;
-            grid-template-columns: auto minmax(0, 1fr) auto;
-            gap: 10px;
-            align-items: center;
-            min-height: 52px;
-        }
-
-        .bottom-left-meta {
-            display: flex;
-            align-items: center;
-            justify-content: flex-start;
-            min-width: 72px;
-        }
-
-        .app-version {
-            font-size: 12px;
-            color: #bdc1c6;
-            white-space: nowrap;
-        }
-
-        .bottom-center-controls {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            min-width: 0;
-        }
-
-        .bottom-right-controls {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            min-width: 0;
-            flex-wrap: wrap;
-        }
-
-        .pip-text {
-            font-size: 13px;
-            color: #bdc1c6;
-        }
-
-        .btn-control {
-            width: 110px;
-            min-width: 110px;
-            max-width: none;
-            font-size: 13px;
-            text-align: center;
-        }
-
-        .btn-pip {
-            background: #3c4043;
-            color: #e8eaed;
-            width: 88px;
-            min-width: 88px;
-        }
-
-        .btn-pip-active {
-            background: #5f6368;
-        }
-
-        .btn-pip:disabled {
-            opacity: 0.85;
-            cursor: default;
-        }
-
-        #muteBtn { background: #ea4335; }
-        #camBtn { background: #1a73e8; }
-
-        .btn-toggle-active {
-            background: #34a853 !important;
-            color: #202124;
-        }
-
-        .bar-inline-label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-width: 0;
-        }
-
-        .bar-inline-label .label-copy {
-            font-size: 13px;
-            color: #bdc1c6;
-            white-space: nowrap;
-        }
-
-        .layout-row {
-            display: flex;
-            align-items: stretch;
-            gap: 10px;
-            min-width: 0;
-        }
-
-        .layout-row .top-center-controls,
-        .layout-row .top-right-controls {
-            flex: 1 1 auto;
-        }
-
-        .top-card-primary .top-row:last-child .status-bar {
-            padding-top: 0;
-        }
-
-        .top-card-secondary .top-row:last-child {
-            justify-content: flex-end;
-        }
-
-        .bottom-card {
-            border: 1px solid #3c4043;
-            border-radius: 8px;
-            padding: 8px 10px;
-            background: #202124;
-            min-width: 0;
-        }
-
-        .bottom-card-left {
-            display: flex;
-            align-items: center;
-            justify-content: flex-start;
-        }
-
-        .bottom-card-center {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-
-        .bottom-card-right {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        body.compact-viewport .app-shell {
-            gap: 6px;
-        }
-
-        body.compact-viewport .top-panel,
-        body.compact-viewport .bottom-bar {
-            padding: 6px 8px;
-        }
-
-        body.compact-viewport .top-card,
-        body.compact-viewport .bottom-card {
-            padding: 6px 8px;
-        }
-
-        @media (max-width: 980px) {
-            .top-panel,
-            .bottom-bar {
-                grid-template-columns: 1fr;
-            }
-
-            .top-panel {
-                gap: 8px;
-            }
-
-            .top-card-secondary {
-                min-width: 0;
-            }
-
-            .top-center-controls,
-            .bottom-center-controls,
-            .bottom-left-meta,
-            .bottom-card-left,
-            .bottom-card-center,
-            .bottom-card-right {
-                justify-content: flex-start;
-            }
-
-            .top-right-controls,
-            .bottom-right-controls {
-                justify-content: flex-start;
-                min-width: 0;
-                flex-wrap: wrap;
-            }
-
-            .status-bar {
-                text-align: left;
-            }
-
-            #roomKey {
-                width: 100%;
-            }
-
-            #callBtn,
-            .btn-control {
-                width: 100px;
-                min-width: 100px;
-            }
-
-            .btn-pip {
-                width: 84px;
-                min-width: 84px;
-            }
-
-            .pip-card {
-                width: min(42vw, 260px);
-                min-width: 130px;
-                right: 10px;
-                bottom: 10px;
-            }
-        }
-
-        @media (orientation: portrait) {
-            .app-shell {
-                grid-template-rows: auto minmax(0, 1fr) auto;
-                gap: 8px;
-            }
-
-            .top-panel {
-                grid-template-columns: 1fr;
-            }
-
-            .top-card {
-                padding: 8px 10px;
-            }
-
-            .top-card-secondary {
-                min-width: 0;
-            }
-
-            .top-row {
-                grid-template-columns: 1fr;
-                gap: 6px;
-            }
-
-            .top-center-controls,
-            .top-right-controls {
-                justify-content: center;
-            }
-
-            .top-card-secondary .top-right-controls {
-                grid-template-columns: 58px 48px minmax(0, 1fr);
-                justify-content: start;
-                width: 100%;
-            }
-
-            .top-card-secondary .top-right-controls > label.device-label {
-                width: 48px;
-                min-width: 48px;
-            }
-
-            .status-bar {
-                text-align: center;
-            }
-
-            #roomKey {
-                width: 100%;
-            }
-
-            .bottom-bar {
-                grid-template-columns: 1fr;
-                gap: 8px;
-            }
-
-            .bottom-left-meta {
-                display: none;
-            }
-
-            .bottom-card-left,
-            .bottom-card-center,
-            .bottom-card-right {
-                justify-content: center;
-            }
-
-            .bottom-card-right {
-                flex-wrap: nowrap;
-                justify-content: center;
-                gap: clamp(4px, 1.6vw, 8px);
-            }
-
-            .bottom-card-right .btn-pip {
-                width: var(--pip-btn-width);
-                min-width: var(--pip-btn-width);
-            }
-
-            .bottom-card-center .btn-control {
-                width: var(--main-btn-width);
-                min-width: var(--main-btn-width);
-            }
-
-            .pip-text {
-                display: none;
-            }
-
-            .pip-card {
-                width: min(45vw, 230px);
-                min-width: 120px;
-                max-width: 230px;
-                right: 8px;
-                bottom: 8px;
-            }
-        }
-
-        @media (max-width: 700px) {
-            body {
-                padding: calc(8px + var(--safe-top)) calc(8px + var(--safe-right)) calc(8px + var(--safe-bottom)) calc(8px + var(--safe-left));
-            }
-
-            .app-shell {
-                gap: 8px;
-            }
-
-            .top-panel,
-            .bottom-bar {
-                padding: 8px;
-            }
-
-            .top-row,
-            .bottom-bar {
-                gap: 6px;
-            }
-
-            .bottom-center-controls,
-            .bottom-right-controls {
-                gap: 6px;
-                flex-wrap: wrap;
-            }
-
-            .bottom-left-meta {
-                display: none;
-            }
-
-            #callBtn,
-            .btn-control {
-                width: 92px;
-                min-width: 92px;
-            }
-
-            .btn-pip {
-                width: 78px;
-                min-width: 78px;
-            }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#202124">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="P2P Meeting">
+<title>P2P Meeting via Secret Key</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root {
+  --app-vh: 100dvh;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --pip-btn-width: 80px;
+  --main-btn-width: 94px;
+
+  /* TUNING VARIABLES */
+  --select-width-ls: 320px; /* Dropdown width for Landscape */
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  font-family: sans-serif;
+  background: #202124;
+  color: white;
+  margin: 0;
+  padding: calc(12px + var(--safe-top)) calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left));
+  height: var(--app-vh);
+  min-height: var(--app-vh);
+  overflow: hidden;
+}
+.app-shell {
+  width: 100%;
+  max-width: 1300px;
+  margin: 0 auto;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+.video-stage {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  background: #000;
+  border: 2px solid #3c4043;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.main-video-host {
+  width: 100%;
+  height: 100%;
+}
+.main-video-host video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+#remoteVideo {
+  transform: none;
+}
+.pip-card {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: min(24vw, 320px);
+  min-width: 190px;
+  aspect-ratio: 4 / 3;
+  border: 2px solid #3c4043;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  transition: top 0.18s ease, right 0.18s ease, bottom 0.18s ease, left 0.18s ease, transform 0.18s ease, width 0.18s ease;
+}
+.pip-video-host {
+  width: 100%;
+  height: 100%;
+}
+.pip-video-host video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+#localVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  background: #000;
+}
+.video-label {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background: rgba(0,0,0,0.6);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.remote-label {
+  z-index: 2;
+}
+
+/* Consolidated Controls Footer Area */
+.app-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+.bottom-bar {
+  background: #303134;
+  border: 1px solid #3c4043;
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+}
+.bottom-card {
+  border: 1px solid #3c4043;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #202124;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.bottom-card-left {
+  justify-content: flex-start;
+}
+.bottom-card-center {
+  justify-content: center;
+}
+.bottom-card-right {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* Meta Bar Area for Status & Version Strings */
+.meta-status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 4px;
+}
+.status-bar {
+  margin: 0;
+  font-size: 14px;
+  color: #aecbfa;
+  white-space: nowrap;
+  font-weight: bold;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-version {
+  font-size: 12px;
+  color: #bdc1c6;
+  white-space: nowrap;
+}
+
+/* Dedicated Portrait Header Container */
+#roomHeaderCard {
+  border: 1px solid #3c4043;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #303134;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#roomHeaderCard .bottom-card {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Device Selector Pop-up Card styling */
+.device-selector-card {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #202124;
+  border: 1px solid #3c4043;
+  border-radius: 8px;
+  padding: 12px 16px;
+  z-index: 10;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+.device-selector-card.active {
+  display: flex;
+}
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
+}
+.device-label {
+  color: #bdc1c6;
+  white-space: nowrap;
+  font-size: 13px;
+  width: 42px;
+  text-align: right;
+}
+.profile-low-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #bdc1c6;
+  font-size: 13px;
+  white-space: nowrap;
+  user-select: none;
+}
+.profile-low-toggle input {
+  margin: 0;
+  accent-color: #1a73e8;
+}
+.device-select-wrap {
+  position: relative;
+}
+.device-select {
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1px solid #5f6368;
+  background: #202124;
+  color: white;
+  font-size: 14px;
+  width: var(--select-width-ls);
+  max-width: var(--select-width-ls);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Inputs & Buttons Base Layout */
+input[type="text"] {
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1px solid #5f6368;
+  background: #202124;
+  color: white;
+  font-size: 14px;
+}
+#roomKey {
+  width: 180px;
+  flex-shrink: 1;
+  min-width: 100px;
+}
+.elapsed-time {
+  width: 88px;
+  min-width: 88px;
+  height: 40px;
+  border: 1px solid #5f6368;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 4px;
+  background: #202124;
+  color: #e8eaed;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+button {
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 14px;
+  color: white;
+  transition: background 0.2s;
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+#callBtn {
+  width: 110px;
+  min-width: 110px;
+}
+.btn-call { background: #1a73e8; }
+.btn-call:hover { background: #1557b0; }
+.btn-call-disconnect { background: #fbbc04; color: #202124; }
+.btn-call-disconnect:hover { background: #f9ab00; }
+
+.btn-control {
+  width: 110px;
+  min-width: 110px;
+  font-size: 13px;
+  text-align: center;
+}
+#muteBtn { background: #ea4335; }
+#camBtn { background: #1a73e8; }
+.btn-toggle-active {
+  background: #34a853 !important;
+  color: #202124;
+}
+.btn-settings-toggle {
+  background: #3c4043;
+  color: white;
+  padding-bottom: 3px; /* Adjust vertical alignment for the arrow */
+  width: 34px;
+  height: 34px;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: flex-end; /* Vertically centers the arrow together with padding-bottom */
+  justify-content: center;  /* Horizontally centers the arrow */
+  line-height: 1;
+}
+.btn-settings-toggle:hover {
+  background: #5f6368;
+}
+.pip-text {
+  font-size: 13px;
+  color: #bdc1c6;
+}
+.btn-pip {
+  background: #3c4043;
+  color: #e8eaed;
+  width: 88px;
+  min-width: 88px;
+}
+.btn-pip-active {
+  background: #5f6368;
+}
+.btn-pip:disabled {
+  opacity: 0.85;
+  cursor: default;
+}
+
+/* Responsiveness Rules for Mid-Sized Viewports */
+@media (max-width: 1100px) and (orientation: landscape) {
+  .bottom-bar {
+    justify-content: center;
+  }
+  .bottom-card {
+    flex-grow: 1;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 980px) and (orientation: landscape) {
+  .bottom-bar {
+    gap: 8px;
+  }
+  #roomKey {
+    width: 100%;
+  }
+}
+
+/* Portrait Rules Modification Overrides */
+@media (orientation: portrait) {
+  .app-shell {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  #roomHeaderCard {
+    display: flex !important;
+  }
+  .video-stage {
+    grid-row: 2;
+  }
+  .app-footer {
+    grid-row: 3;
+  }
+  .bottom-bar {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+    background: transparent;
+    border: none;
+    gap: 8px;
+  }
+  .bottom-card {
+    width: 100%;
+    justify-content: center;
+  }
+  .bottom-card-right {
+    order: 1;
+  }
+  .bottom-card-center {
+    order: 2;
+  }
+  
+  /* Removed 'display: flex;' so the card stays hidden until [^] is clicked */
+  .device-selector-card {
+    position: static;
+    transform: none;
+    width: 100%;
+    order: 3;
+    box-shadow: none;
+    padding: 12px 10px;
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  /* Ensures the toggle engine can still force visibility when active */
+  .device-selector-card.active {
+    display: flex !important;
+  }
+  
+  /* Align everything to the right side of the row by default */
+  .device-row {
+    display: flex !important;
+    justify-content: flex-end; 
+    align-items: center;
+    width: 100%;
+    gap: 0;
+  }
+  
+  /* This forces the checkbox to the left, leaving the rest grouped on the right */
+  .profile-low-toggle {
+    margin-right: auto !important; 
+    display: inline-flex;
+    align-items: center;
+  }
+  
+  /* Positioned directly next to the select boxes with a small gap */
+  .device-label {
+    display: inline-block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    text-align: right !important;
+    margin: 0 !important;
+    padding-right: 8px !important;
+    color: #bdc1c6;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  /* Anchors the select wrapper right against the label */
+  .device-select-wrap {
+    display: block !important;
+    width: 220px !important;
+    margin: 0 !important;
+  }
+
+  /* Locks size and forces text truncation in Portrait orientation */
+  .device-select {
+    width: 220px !important;       
+    max-width: 220px !important;   
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+  }
+  
+  .pip-text {
+    display: none;
+  }
+  .meta-status-bar {
+    display: none;
+  }
+  #roomHeaderCard .status-bar {
+    text-align: center;
+    width: 100%;
+  }
+}
+</style>
 </head>
 <body>
 
-    <div class="app-shell">
-        <header class="top-panel">
-            <div class="top-card top-card-primary">
-                <div class="top-row">
-                    <div class="top-center-controls">
-                        <span id="elapsedTime" class="elapsed-time" title="Elapsed time">0:00:00</span>
-                        <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
-                        <button id="callBtn" class="btn-call" title="Call or End (Q)">Call</button>
-                    </div>
-                </div>
-                <div class="top-row">
-                    <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
-                </div>
+<div class="app-shell">
+  <div id="roomHeaderCard" style="display: none;"></div>
 
-            </div>
-            <div class="top-card top-card-secondary">
-                <div class="top-row">
-                    <div class="top-right-controls">
-                        <label for="audioProfileLow" class="profile-low-toggle"><input id="audioProfileLow" type="checkbox" checked>Low</label>
-                        <label class="device-label" for="audioSource">Mic:</label>
-                        <div class="device-select-wrap">
-                            <select id="audioSource" class="device-select"></select>
-                        </div>
-                    </div>
-                </div>
+  <main class="video-stage">
+    <div id="mainVideoHost" class="main-video-host">
+      <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+    <div id="mainVideoLabel" class="video-label remote-label">Remote</div>
+    
+    <div id="pipCard" class="pip-card">
+      <div id="pipVideoHost" class="pip-video-host">
+        <video id="localVideo" autoplay playsinline muted></video>
+      </div>
+      <div id="pipVideoLabel" class="video-label">Local</div>
+    </div>
+  </main>
 
-                <div class="top-row">
-                    <div class="top-right-controls">
-                        <label for="videoProfileLow" class="profile-low-toggle"><input id="videoProfileLow" type="checkbox" checked>Low</label>
-                        <label class="device-label" for="videoSource">Cam:</label>
-                        <div class="device-select-wrap">
-                            <select id="videoSource" class="device-select"></select>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </header>
-
-        <main class="video-stage">
-            <div id="mainVideoHost" class="main-video-host">
-                <video id="remoteVideo" autoplay playsinline></video>
-            </div>
-            <div id="mainVideoLabel" class="video-label remote-label">Friend (Remote)</div>
-
-            <div id="pipCard" class="pip-card">
-                <div id="pipVideoHost" class="pip-video-host">
-                    <video id="localVideo" autoplay playsinline muted></video>
-                </div>
-                <div id="pipVideoLabel" class="video-label">You (Local)</div>
-            </div>
-        </main>
-
-        <footer class="bottom-bar">
-            <div class="bottom-left-meta">
-                <span id="appVersion" class="app-version">vx.x.x</span>
-            </div>
-            <div class="bottom-card bottom-card-center">
-                <button id="muteBtn" class="btn-control" data-muted="false" title="Mute toggle (Space)">Mute</button>
-                <button id="camBtn" class="btn-control" data-off="false" title="Camera toggle (C)">Camera off</button>
-            </div>
-            <div class="bottom-card bottom-card-right">
-                <span class="pip-text">PiP:</span>
-                <button id="moveBtn" class="btn-control btn-pip" type="button" title="Move PiP (M)" disabled>Move</button>
-                <button id="swapBtn" class="btn-control btn-pip" type="button" title="Swap main/PiP (X)" disabled>Swap</button>
-                <button id="sizeBtn" class="btn-control btn-pip" type="button" title="Cycle PiP size (V)" disabled>Size</button>
-            </div>
-        </footer>
+  <footer class="app-footer">
+    <div id="deviceSelector" class="device-selector-card">
+      <div class="device-row">
+        <label for="audioProfileLow" class="profile-low-toggle">
+          <input id="audioProfileLow" type="checkbox" checked>Low
+        </label>
+        <label class="device-label" for="audioSource">Mic:</label>
+        <div class="device-select-wrap">
+          <select id="audioSource" class="device-select"></select>
+        </div>
+      </div>
+      <div class="device-row">
+        <label for="videoProfileLow" class="profile-low-toggle">
+          <input id="videoProfileLow" type="checkbox" checked>Low
+        </label>
+        <label class="device-label" for="videoSource">Cam:</label>
+        <div class="device-select-wrap">
+          <select id="videoSource" class="device-select"></select>
+        </div>
+      </div>
     </div>
 
-    <!-- Offline-Safe Script Routing -->
-    <script type="module">
+    <div class="bottom-bar">
+      <div id="connectionControlsCard" class="bottom-card bottom-card-left">
+        <span id="elapsedTime" class="elapsed-time" title="Elapsed time">0:00:00</span>
+        <input type="text" id="roomKey" placeholder="e.g., hristo-room" autocomplete="off">
+        <button id="callBtn" class="btn-call" title="Call or End (Q)">Call</button>
+      </div>
+
+      <div class="bottom-card bottom-card-center">
+        <button id="muteBtn" class="btn-control" data-muted="false" title="Mute toggle (Space)">Mute</button>
+        <button id="camBtn" class="btn-control" data-off="false" title="Camera toggle (C)">Camera off</button>
+        <button id="settingsToggleBtn" class="btn-settings-toggle" type="button" title="Toggle Hardware Selectors" aria-label="Toggle hardware selectors">⌃</button>
+      </div>
+
+      <div class="bottom-card bottom-card-right">
+        <span class="pip-text">PiP:</span>
+        <button id="moveBtn" class="btn-control btn-pip" type="button" title="Move PiP (M)" disabled>Move</button>
+        <button id="swapBtn" class="btn-control btn-pip" type="button" title="Swap main/PiP (X)" disabled>Swap</button>
+        <button id="sizeBtn" class="btn-control btn-pip" type="button" title="Cycle PiP size (V)" disabled>Size</button>
+      </div>
+    </div>
+
+    <div class="meta-status-bar">
+      <div id="statusText" class="status-bar">Camera active. Enter a key above to connect.</div>
+      <span id="appVersion" class="app-version">vX.X.XX</span>
+    </div>
+  </footer>
+</div>
+
+<script type="module">
+  const settingsToggle = document.getElementById('settingsToggleBtn');
+  const deviceSelector = document.getElementById('deviceSelector');
+  
+  settingsToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deviceSelector.classList.toggle('active');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!deviceSelector.contains(e.target) && e.target !== settingsToggle) {
+      deviceSelector.classList.remove('active');
+    }
+  });
+
+  function handleMediaLayoutChange() {
+    const isPortrait = window.matchMedia("(orientation: portrait)").matches;
+    const connectionCard = document.getElementById('connectionControlsCard');
+    const portraitHeaderTarget = document.getElementById('roomHeaderCard');
+    const bottomBar = document.querySelector('.bottom-bar');
+    const statusText = document.getElementById('statusText');
+    const metaStatusBar = document.querySelector('.meta-status-bar');
+
+    if (isPortrait) {
+      if (connectionCard.parentElement !== portraitHeaderTarget) {
+        portraitHeaderTarget.appendChild(connectionCard);
+        portraitHeaderTarget.appendChild(statusText);
+      }
+    } else {
+      if (connectionCard.parentElement !== bottomBar) {
+        bottomBar.insertBefore(connectionCard, bottomBar.firstChild);
+        metaStatusBar.insertBefore(statusText, metaStatusBar.firstChild);
+      }
+    }
+  }
+
+  window.addEventListener('resize', handleMediaLayoutChange);
+  window.addEventListener('orientationchange', handleMediaLayoutChange);
+  document.addEventListener('DOMContentLoaded', handleMediaLayoutChange);
+
+    // Offline-Safe Script Routing
+    // <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
         import { getDatabase, get, ref, runTransaction, set, onChildAdded, onValue, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
         
@@ -806,7 +651,7 @@
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.2.12';
+        const APP_VERSION = 'v0.2.13';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
@@ -897,8 +742,8 @@
         }
 
         const videoStatusTrackers = {
-            main: { labelEl: mainVideoLabel, videoEl: remoteVideo, baseText: 'Friend (Remote)', rafId: 0 },
-            pip: { labelEl: pipVideoLabel, videoEl: localVideo, baseText: 'You (Local)', rafId: 0 }
+            main: { labelEl: mainVideoLabel, videoEl: remoteVideo, baseText: 'Remote', rafId: 0 },
+            pip: { labelEl: pipVideoLabel, videoEl: localVideo, baseText: 'Local', rafId: 0 }
         };
 
         function syncVideoTrackLabel(cardKey, videoEl, baseText) {
@@ -1452,8 +1297,8 @@
                     pipVideoHost.appendChild(localVideo);
                 }
 
-                syncVideoTrackLabel('main', remoteVideo, 'Friend (Remote)');
-                syncVideoTrackLabel('pip', localVideo, 'You (Local)');
+                syncVideoTrackLabel('main', remoteVideo, 'Remote');
+                syncVideoTrackLabel('pip', localVideo, 'Local');
                 localVideo.muted = true;
             } else {
                 if (mainVideoHost.firstElementChild !== localVideo) {
@@ -1463,8 +1308,8 @@
                     pipVideoHost.appendChild(remoteVideo);
                 }
 
-                syncVideoTrackLabel('main', localVideo, 'You (Local)');
-                syncVideoTrackLabel('pip', remoteVideo, 'Friend (Remote)');
+                syncVideoTrackLabel('main', localVideo, 'Local');
+                syncVideoTrackLabel('pip', remoteVideo, 'Remote');
                 localVideo.muted = true;
             }
 
