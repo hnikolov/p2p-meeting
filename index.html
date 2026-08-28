@@ -18,11 +18,6 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
-  --pip-btn-width: 80px;
-  --main-btn-width: 94px;
-
-  /* TUNING VARIABLES */
-  --select-width-ls: 320px; /* Dropdown width for Landscape */
 }
 * {
   box-sizing: border-box;
@@ -336,18 +331,18 @@ button {
   padding: 10px 14px;
   white-space: nowrap;
 }
-#callBtn {
+.btn-call,
+.btn-control {
   width: 110px;
   min-width: 110px;
 }
+
 .btn-call { background: #1a73e8; }
 .btn-call:hover { background: #1557b0; }
 .btn-call-disconnect { background: #fbbc04; color: #202124; }
 .btn-call-disconnect:hover { background: #f9ab00; }
 
 .btn-control {
-  width: 110px;
-  min-width: 110px;
   font-size: 13px;
   text-align: center;
 }
@@ -1160,16 +1155,6 @@ button {
 
             const compactViewport = isPortraitViewport && viewportHeight < 700;
             document.body.classList.toggle('compact-viewport', compactViewport);
-
-            let pipButtonWidth = 80;
-            let mainButtonWidth = 94;
-            if (isPortraitViewport) {
-                pipButtonWidth = Math.max(66, Math.min(80, Math.floor((viewportWidth - 96) / 3)));
-                mainButtonWidth = Math.max(82, Math.min(94, Math.floor((viewportWidth - 126) / 2)));
-            }
-
-            document.documentElement.style.setProperty('--pip-btn-width', `${pipButtonWidth}px`);
-            document.documentElement.style.setProperty('--main-btn-width', `${mainButtonWidth}px`);
         }
 
         function scheduleViewportLayoutMetricsUpdate() {
