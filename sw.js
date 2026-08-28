@@ -1,8 +1,9 @@
-const CACHE_NAME = 'p2p-meeting-v0.3.0';
+const CACHE_NAME = 'p2p-meeting-v0.3.1';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
+  './WebRTCDebugger.js',
   './icon.svg',
   './icon-192.png',
   './icon-512.png'

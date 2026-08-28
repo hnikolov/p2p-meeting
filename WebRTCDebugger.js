@@ -27,7 +27,7 @@ class WebRTCDebugger {
     this.hudElement = document.createElement('div');
     this.hudElement.id = 'webrtc-expert-hud';
     this.hudElement.style.cssText = `
-      position: fixed; top: 15px; right: 15px; width: 340px; max-height: 95vh; overflow-y: auto;
+      position: fixed; top: 15px; right: 15px; width: 280px; max-height: 95vh; overflow-y: auto;
       background: rgba(20, 20, 20, 0.95); color: #00ff66;
       font-family: 'Courier New', monospace; font-size: 11px;
       line-height: 1.4; padding: 12px; border-radius: 6px;

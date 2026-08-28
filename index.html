@@ -196,15 +196,33 @@ body {
   transform: translateX(-50%);
   background: #202124;
   border: 1px solid #3c4043;
-  border-radius: 8px;
-  padding: 12px 16px;
+  border-radius: 12px;
+  padding: 12px 12px 14px;
   z-index: 10;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  width: min(90vw, 500px);
 }
 .device-selector-card.active {
   display: flex;
+}
+.device-section {
+  background: rgba(34, 36, 40, 0.96);
+  border: 1px solid #3c4043;
+  border-radius: 10px;
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.device-section-header {
+  color: #f1f3f4;
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 .device-row {
   display: flex;
@@ -213,12 +231,27 @@ body {
   gap: 12px;
   width: 100%;
 }
+.device-row-inline {
+  justify-content: flex-start;
+}
+.device-row-compact {
+  margin-bottom: 4px;
+}
 .device-label {
   color: #bdc1c6;
   white-space: nowrap;
   font-size: 13px;
   width: 42px;
   text-align: right;
+}
+.device-front-label {
+  width: 100%;
+  max-width: 280px;
+  color: #e8eaed;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  padding-left: 2px;
 }
 .profile-low-toggle {
   display: inline-flex;
@@ -233,21 +266,70 @@ body {
   margin: 0;
   accent-color: #1a73e8;
 }
+.device-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 22px;
+  margin: 2px 0 4px;
+}
+.device-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #dfe1e5;
+  font-size: 14px;
+  user-select: none;
+}
+.device-toggle input {
+  accent-color: #1a73e8;
+  margin: 0;
+}
 .device-select-wrap {
   position: relative;
 }
-.device-select {
+.device-select-wrap-wide {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.device-select,
+.device-advanced-select {
   padding: 10px 12px;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid #5f6368;
   background: #202124;
   color: white;
   font-size: 14px;
-  width: var(--select-width-ls);
-  max-width: var(--select-width-ls);
+  width: 100%;
+  max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
   overflow: hidden;
+}
+.device-select {
+  width: 100%;
+  max-width: 100%;
+}
+.device-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  margin-top: 2px;
+}
+.device-grid-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.device-grid-item label {
+  color: #e8eaed;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.device-advanced-select {
+  min-height: 42px;
+  width: 100%;
+  max-width: 100%;
 }
 
 /* Inputs & Buttons Base Layout */
@@ -434,17 +516,18 @@ button {
     white-space: nowrap;
   }
 
-  /* Anchors the select wrapper right against the label */
+  /* Make the selector controls span the available width in portrait mode */
   .device-select-wrap {
     display: block !important;
-    width: 220px !important;
+    width: 100% !important;
+    max-width: 100% !important;
     margin: 0 !important;
   }
 
-  /* Locks size and forces text truncation in Portrait orientation */
+  /* Allow the actual select to fill the full row instead of a fixed-width box */
   .device-select {
-    width: 220px !important;       
-    max-width: 220px !important;   
+    width: 100% !important;
+    max-width: 100% !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
     overflow: hidden !important;
@@ -498,22 +581,115 @@ button {
 
   <footer class="app-footer">
     <div id="deviceSelector" class="device-selector-card">
-      <div class="device-row">
-        <label for="audioProfileLow" class="profile-low-toggle">
-          <input id="audioProfileLow" type="checkbox" checked>Low
-        </label>
-        <label class="device-label" for="audioSource">Mic:</label>
-        <div class="device-select-wrap">
-          <select id="audioSource" class="device-select"></select>
+      <div class="device-section">
+        <h3 class="device-section-header">Microphone</h3>
+
+        <div class="device-row device-row-compact" style="justify-content: stretch;">
+          <div class="device-select-wrap device-select-wrap-wide" style="width: 100%;">
+            <select id="audioSource" class="device-select"></select>
+          </div>
+        </div>
+
+        <div class="device-toggle-row">
+          <label class="device-toggle"><input type="checkbox" checked> Echo Cancellation</label>
+          <label class="device-toggle"><input type="checkbox" checked> Noise Suppression</label>
+          <label class="device-toggle"><input type="checkbox" checked> Auto Gain</label>
+        </div>
+
+        <div class="device-row device-row-inline">
+          <label for="audioProfileLow" class="profile-low-toggle">
+            <input id="audioProfileLow" type="checkbox" checked>Low
+          </label>
+        </div>
+
+        <div class="device-grid">
+          <div class="device-grid-item">
+            <label for="audioSampleRate">Sample Rate (if supported)</label>
+            <select id="audioSampleRate" class="device-advanced-select">
+              <option selected>48000 Hz</option>
+              <option>44100 Hz</option>
+              <option>16000 Hz</option>
+            </select>
+          </div>
+
+          <div class="device-grid-item">
+            <label for="audioBitDepth">Bit Depth (if supported)</label>
+            <select id="audioBitDepth" class="device-advanced-select">
+              <option selected>16-bit</option>
+              <option>24-bit</option>
+            </select>
+          </div>
+
+          <div class="device-grid-item">
+            <label for="audioChannels">Channels (if supported)</label>
+            <select id="audioChannels" class="device-advanced-select">
+              <option selected>Mono</option>
+              <option>Stereo</option>
+            </select>
+          </div>
+
+          <div class="device-grid-item">
+            <label for="audioBitrateCeiling">Bitrate Ceiling</label>
+            <select id="audioBitrateCeiling" class="device-advanced-select">
+              <option selected>256 kbps</option>
+              <option>128 kbps</option>
+              <option>64 kbps</option>
+            </select>
+          </div>
         </div>
       </div>
-      <div class="device-row">
-        <label for="videoProfileLow" class="profile-low-toggle">
-          <input id="videoProfileLow" type="checkbox" checked>Low
-        </label>
-        <label class="device-label" for="videoSource">Cam:</label>
-        <div class="device-select-wrap">
-          <select id="videoSource" class="device-select"></select>
+
+      <div class="device-section">
+        <h3 class="device-section-header">Camera &amp; Transport</h3>
+
+        <div class="device-row device-row-compact" style="justify-content: stretch;">
+          <div class="device-select-wrap device-select-wrap-wide" style="width: 100%;">
+            <select id="videoSource" class="device-select"></select>
+          </div>
+        </div>
+
+        <div class="device-row device-row-inline">
+          <label for="videoProfileLow" class="profile-low-toggle">
+            <input id="videoProfileLow" type="checkbox" checked>Low
+          </label>
+        </div>
+
+        <div class="device-grid">
+          <div class="device-grid-item">
+            <label for="videoResolution">Resolution</label>
+            <select id="videoResolution" class="device-advanced-select">
+              <option>360p</option>
+              <option selected>720p</option>
+              <option>1080p</option>
+            </select>
+          </div>
+
+          <div class="device-grid-item">
+            <label for="videoFps">Max FPS (Network)</label>
+            <select id="videoFps" class="device-advanced-select">
+              <option>60 FPS</option>
+              <option selected>30 FPS</option>
+              <option>15 FPS</option>
+            </select>
+          </div>
+
+          <div class="device-grid-item">
+            <label for="videoDegradation">Degradation</label>
+            <select id="videoDegradation" class="device-advanced-select">
+              <option selected>Maintain FPS</option>
+              <option>Maintain Resolution</option>
+              <option>Balanced Mode</option>
+            </select>
+          </div>
+
+          <div class="device-grid-item">
+            <label for="videoBitrateCeiling">Bitrate Ceiling</label>
+            <select id="videoBitrateCeiling" class="device-advanced-select">
+              <option>4000 kbps</option>
+              <option selected>2000 kbps</option>
+              <option>500 kbps</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>
@@ -657,7 +833,7 @@ button {
         const appVersionText = document.getElementById('appVersion');
         const elapsedTimeText = document.getElementById('elapsedTime');
 
-        const APP_VERSION = 'v0.3.0';
+        const APP_VERSION = 'v0.3.1';
 
         const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
         const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
