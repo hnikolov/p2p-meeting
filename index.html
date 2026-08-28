@@ -227,8 +227,6 @@ body {
 .device-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
   width: 100%;
 }
 .device-row-inline {
@@ -237,47 +235,18 @@ body {
 .device-row-compact {
   margin-bottom: 4px;
 }
-.device-label {
-  color: #bdc1c6;
-  white-space: nowrap;
-  font-size: 13px;
-  width: 42px;
-  text-align: right;
-}
-.device-front-label {
-  width: 100%;
-  max-width: 280px;
-  color: #e8eaed;
-  font-size: 14px;
-  font-weight: 600;
-  text-align: left;
-  padding-left: 2px;
-}
-.profile-low-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #bdc1c6;
-  font-size: 13px;
-  white-space: nowrap;
-  user-select: none;
-}
-.profile-low-toggle input {
-  margin: 0;
-  accent-color: #1a73e8;
-}
 .device-toggle-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 18px 22px;
-  margin: 2px 0 4px;
+  gap: 12px 14px;
+  margin: 2px 0 8px;
 }
 .device-toggle {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   color: #dfe1e5;
-  font-size: 14px;
+  font-size: 13px;
   user-select: none;
 }
 .device-toggle input {
@@ -286,6 +255,7 @@ body {
 }
 .device-select-wrap {
   position: relative;
+  width: 100%;
 }
 .device-select-wrap-wide {
   flex: 1 1 auto;
@@ -293,21 +263,17 @@ body {
 }
 .device-select,
 .device-advanced-select {
+  width: 100%;
+  max-width: 100%;
   padding: 10px 12px;
   border-radius: 6px;
   border: 1px solid #5f6368;
   background: #202124;
   color: white;
   font-size: 14px;
-  width: 100%;
-  max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
   overflow: hidden;
-}
-.device-select {
-  width: 100%;
-  max-width: 100%;
 }
 .device-grid {
   display: grid;
@@ -319,7 +285,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 100%;
+  min-width: 0;
 }
 .device-grid-item label {
   color: #e8eaed;
@@ -328,8 +294,6 @@ body {
 }
 .device-advanced-select {
   min-height: 42px;
-  width: 100%;
-  max-width: 100%;
 }
 
 /* Inputs & Buttons Base Layout */
@@ -487,36 +451,14 @@ button {
     display: flex !important;
   }
   
-  /* Align everything to the right side of the row by default */
   .device-row {
     display: flex !important;
-    justify-content: flex-end; 
+    justify-content: flex-start;
     align-items: center;
     width: 100%;
-    gap: 0;
-  }
-  
-  /* This forces the checkbox to the left, leaving the rest grouped on the right */
-  .profile-low-toggle {
-    margin-right: auto !important; 
-    display: inline-flex;
-    align-items: center;
-  }
-  
-  /* Positioned directly next to the select boxes with a small gap */
-  .device-label {
-    display: inline-block !important;
-    width: auto !important;
-    min-width: 0 !important;
-    text-align: right !important;
-    margin: 0 !important;
-    padding-right: 8px !important;
-    color: #bdc1c6;
-    font-size: 13px;
-    white-space: nowrap;
+    gap: 8px;
   }
 
-  /* Make the selector controls span the available width in portrait mode */
   .device-select-wrap {
     display: block !important;
     width: 100% !important;
@@ -524,13 +466,18 @@ button {
     margin: 0 !important;
   }
 
-  /* Allow the actual select to fill the full row instead of a fixed-width box */
-  .device-select {
+  .device-select,
+  .device-advanced-select {
     width: 100% !important;
     max-width: 100% !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
     overflow: hidden !important;
+  }
+
+  .device-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
   }
   
   .pip-text {
@@ -591,20 +538,20 @@ button {
         </div>
 
         <div class="device-toggle-row">
-          <label class="device-toggle"><input type="checkbox" checked> Echo Cancellation</label>
-          <label class="device-toggle"><input type="checkbox" checked> Noise Suppression</label>
+          <label class="device-toggle"><input type="checkbox" checked> Echo Cancel</label>
+          <label class="device-toggle"><input type="checkbox" checked> Noise Suppress</label>
           <label class="device-toggle"><input type="checkbox" checked> Auto Gain</label>
         </div>
 
         <div class="device-row device-row-inline">
-          <label for="audioProfileLow" class="profile-low-toggle">
+          <label for="audioProfileLow" class="device-toggle">
             <input id="audioProfileLow" type="checkbox" checked>Low
           </label>
         </div>
 
         <div class="device-grid">
           <div class="device-grid-item">
-            <label for="audioSampleRate">Sample Rate (if supported)</label>
+            <label for="audioSampleRate">Samples (if supported)</label>
             <select id="audioSampleRate" class="device-advanced-select">
               <option selected>48000 Hz</option>
               <option>44100 Hz</option>
@@ -649,7 +596,7 @@ button {
         </div>
 
         <div class="device-row device-row-inline">
-          <label for="videoProfileLow" class="profile-low-toggle">
+          <label for="videoProfileLow" class="device-toggle">
             <input id="videoProfileLow" type="checkbox" checked>Low
           </label>
         </div>
