@@ -12,7 +12,7 @@ class WebRTCDebugger {
     this.hudElement = null;
     this.isMonitoring = false;
 
-    this.isHudVisible = true; 
+    this.isHudVisible = false; 
     this.globalKeyHandler = null;
 
     // Throughput Delta Memory Buffers
@@ -136,6 +136,7 @@ class WebRTCDebugger {
   start(peerConnection, localStream) {
     this.stop();
     this.#createHUDMarkup();
+    this.hudElement.style.display = this.isHudVisible ? 'block' : 'none';
     document.getElementById('hud-status').innerText = "ACTIVE";
     document.getElementById('hud-status').style.color = "#00ff66";
     this.isMonitoring = true;
