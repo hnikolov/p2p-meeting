@@ -546,6 +546,9 @@ button {
   </footer>
 </div>
 
+<!-- Load the diagnostic tool first -->
+<script src="WebRTCDebugger.js"></script>
+
 <script type="module">
   const settingsToggle = document.getElementById('settingsToggleBtn');
   const deviceSelector = document.getElementById('deviceSelector');
@@ -615,6 +618,9 @@ button {
         let remoteIceQueue = [];
         let signalingUnsubscribers = [];
         let joinTimeoutId = null;
+
+        const webRtcDebugger = new WebRTCDebugger();
+        webRtcDebugger.bindToggleKey();
 
         const rtcConfig = {
             iceServers: [
@@ -930,73 +936,17 @@ button {
                 .catch(err => console.warn('Audio sender bitrate tuning skipped by browser:', err));
         }
 
-        function applyOpusMaxAverageBitrateToSdp(sdp, bitrateBps) {
-            if (typeof sdp !== 'string' || !sdp.trim()) {
-                return sdp;
-            }
-
-            if (!Number.isFinite(bitrateBps) || bitrateBps <= 0) {
-                return sdp;
-            }
-
-            const newline = sdp.includes('\r\n') ? '\r\n' : '\n';
-            const hasTrailingNewline = sdp.endsWith('\r\n') || sdp.endsWith('\n');
-            const lines = sdp.split(/\r?\n/);
-
-            const opusLineIndex = lines.findIndex(line => /^a=rtpmap:(\d+)\s+opus\/48000/i.test(line));
-            if (opusLineIndex < 0) {
-                return sdp;
-            }
-
-            const opusMatch = lines[opusLineIndex].match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
-            if (!opusMatch || !opusMatch[1]) {
-                return sdp;
-            }
-
-            const opusPayloadType = opusMatch[1];
-            const fmtpPrefix = `a=fmtp:${opusPayloadType}`;
-            const fmtpLineIndex = lines.findIndex(line => line.startsWith(fmtpPrefix));
-
-            if (fmtpLineIndex >= 0) {
-                if (/maxaveragebitrate=\d+/i.test(lines[fmtpLineIndex])) {
-                    lines[fmtpLineIndex] = lines[fmtpLineIndex].replace(/maxaveragebitrate=\d+/i, `maxaveragebitrate=${bitrateBps}`);
-                } else {
-                    lines[fmtpLineIndex] = `${lines[fmtpLineIndex]};maxaveragebitrate=${bitrateBps}`;
-                }
-            } else {
-                lines.splice(opusLineIndex + 1, 0, `${fmtpPrefix} maxaveragebitrate=${bitrateBps}`);
-            }
-
-            const updatedSdp = lines.join(newline);
-            return hasTrailingNewline ? `${updatedSdp}${newline}` : updatedSdp;
-        }
-
-        async function setLocalDescriptionWithAudioTuning(peerConn, description) {
+        async function setLocalDescriptionSafely(peerConn, description) {
             if (!peerConn || !description) {
                 throw new Error('Peer connection and description are required.');
             }
 
-            const preferredBitrateBps = getPreferredAudioBitrateBps();
-            if (!description.sdp || !Number.isFinite(preferredBitrateBps) || preferredBitrateBps <= 0) {
-                await peerConn.setLocalDescription(description);
-                return peerConn.localDescription || description;
-            }
-
-            const tunedSdp = applyOpusMaxAverageBitrateToSdp(description.sdp, preferredBitrateBps);
-            if (tunedSdp === description.sdp) {
-                await peerConn.setLocalDescription(description);
-                return peerConn.localDescription || description;
-            }
-
-            const tunedDescription = { type: description.type, sdp: tunedSdp };
-
             try {
-                await peerConn.setLocalDescription(tunedDescription);
-                return peerConn.localDescription || tunedDescription;
-            } catch (err) {
-                console.warn('SDP bitrate tuning was rejected, using original SDP:', err);
                 await peerConn.setLocalDescription(description);
                 return peerConn.localDescription || description;
+            } catch (err) {
+                console.warn('setLocalDescription rejected with the original SDP; aborting call setup:', err);
+                throw err;
             }
         }
 
@@ -1483,6 +1433,9 @@ button {
         function closePeerConnection() {
             if (!peerConnection) return;
 
+            // Clears loops, drops key listeners, and unmounts the UI
+            webRtcDebugger.stop();
+
             peerConnection.ontrack = null;
             peerConnection.onicecandidate = null;
             peerConnection.onconnectionstatechange = null;
@@ -1681,6 +1634,9 @@ button {
                 videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
             }
 
+            // Start the WebRTC HUD debugger for this peer connection
+            webRtcDebugger.start(peerConnection, localStream);
+
             peerConnection.ontrack = (event) => {
                 if (!remoteStream) {
                     remoteStream = new MediaStream();
@@ -1774,7 +1730,7 @@ button {
                 listenToRoom(roomName);
 
                 const offer = await peerConnection.createOffer();
-                const localOfferDescription = await setLocalDescriptionWithAudioTuning(peerConnection, offer);
+                const localOfferDescription = await setLocalDescriptionSafely(peerConnection, offer);
 
                 // Write the local connection configurations to the secret database cluster
                 const offerRef = ref(db, `rooms/${roomName}/offer`);
@@ -1916,7 +1872,7 @@ button {
                         clearJoinTimeout();
                         statusText.innerText = 'Processing call invitation...';
                         const answer = await peerConnection.createAnswer();
-                        const localAnswerDescription = await setLocalDescriptionWithAudioTuning(peerConnection, answer);
+                        const localAnswerDescription = await setLocalDescriptionSafely(peerConnection, answer);
 
                         const answerRef = ref(db, `rooms/${roomName}/answer`);
                         await set(answerRef, {
