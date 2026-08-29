@@ -120,15 +120,21 @@ const pipVideoLabel = document.getElementById('pipVideoLabel');
 const pipCard = document.getElementById('pipCard');
 const audioSource = document.getElementById('audioSource');
 const videoSource = document.getElementById('videoSource');
-const audioProfileLowToggle = document.getElementById('audioProfileLow');
-const videoProfileLowToggle = document.getElementById('videoProfileLow');
+const audioSampleRate = document.getElementById('audioSampleRate');
+const audioBitDepth = document.getElementById('audioBitDepth');
+const audioChannels = document.getElementById('audioChannels');
+const audioBitrateCeiling = document.getElementById('audioBitrateCeiling');
+const videoResolution = document.getElementById('videoResolution');
+const videoFps = document.getElementById('videoFps');
+const videoDegradation = document.getElementById('videoDegradation');
+const videoBitrateCeiling = document.getElementById('videoBitrateCeiling');
 const moveBtn = document.getElementById('moveBtn');
 const swapBtn = document.getElementById('swapBtn');
 const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.3.3';
+const APP_VERSION = 'v0.4.0';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const AUDIO_BITRATE_SPEECH_BPS = 128000;
@@ -174,6 +180,7 @@ const deviceSelectUiState = {
 let viewportMetricsRafId = 0;
 let elapsedTimerId = 0;
 let elapsedTimerStartedAt = 0;
+let isMediaChanging = false;
 
 function formatElapsedTime(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -272,26 +279,66 @@ function startVideoTrackTelemetry() {
 
 startVideoTrackTelemetry();
 
-function isLowAudioProfileEnabled() {
-  return !audioProfileLowToggle || audioProfileLowToggle.checked;
+// STREAM SETTINGS START
+function getAudioFilterInputState() {
+  const filterInputs = Array.from(document.querySelectorAll('#deviceSelector .device-section .device-toggle input')).slice(0, 3);
+
+  return {
+    echoCancellation: filterInputs[0] ? filterInputs[0].checked : true,
+    noiseSuppression: filterInputs[1] ? filterInputs[1].checked : true,
+    autoGainControl: filterInputs[2] ? filterInputs[2].checked : true
+  };
 }
 
-function isLowVideoProfileEnabled() {
-  return !videoProfileLowToggle || videoProfileLowToggle.checked;
+function parseSampleRateFromUi() {
+  const value = (audioSampleRate && audioSampleRate.value) || '48000 Hz';
+  const match = value.match(/(\d+)/);
+  return match ? Number.parseInt(match[1], 10) : 48000;
+}
+
+function parseBitDepthFromUi() {
+  const value = (audioBitDepth && audioBitDepth.value) || '16-bit';
+  const match = value.match(/(\d+)/);
+  return match ? Number.parseInt(match[1], 10) : 16;
+}
+
+function parseChannelCountFromUi() {
+  const value = (audioChannels && audioChannels.value) || 'Mono';
+  return value.toLowerCase() === 'stereo' ? 2 : 1;
+}
+
+function parseRateBpsFromUi(selectElement, fallbackBps) {
+  const value = selectElement && selectElement.value ? selectElement.value : '';
+  const match = value.match(/(\d+)/);
+  const parsedValue = match ? Number.parseInt(match[1], 10) : fallbackBps;
+  return Number.isFinite(parsedValue) ? parsedValue * 1000 : fallbackBps;
+}
+
+function getAudioBitrateBps() {
+  return parseRateBpsFromUi(audioBitrateCeiling, 256);
+}
+
+function getVideoBitrateBps() {
+  return parseRateBpsFromUi(videoBitrateCeiling, 2000);
+}
+
+function resolveVideoConstraints() {
+  const selectedResolution = (videoResolution && videoResolution.value) || '720p';
+  const resolutionMap = {
+    '360p': { width: { ideal: 640, max: 640 }, height: { ideal: 360, max: 360 } },
+    '720p': { width: { ideal: 1280, max: 1280 }, height: { ideal: 720, max: 720 } },
+    '1080p': { width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } }
+  };
+
+  return resolutionMap[selectedResolution] || resolutionMap['720p'];
 }
 
 function buildVideoConstraints(deviceId = null) {
-  const constraints = isLowVideoProfileEnabled()
-    ? {
-        width: { ideal: 640, max: 640 },
-        height: { ideal: 480, max: 480 },
-        frameRate: { ideal: 15, max: 15 }
-      }
-    : {
-        width: { ideal: 1280, max: 1280 },
-        height: { ideal: 720, max: 720 },
-        frameRate: { ideal: 20, max: 20 }
-      };
+  const constraints = {
+    ...resolveVideoConstraints(),
+    frameRate: { ideal: (videoFps && videoFps.value ? Number.parseFloat(videoFps.value) : 30), max: (videoFps && videoFps.value ? Number.parseFloat(videoFps.value) : 30) },
+    aspectRatio: { ideal: 1.7777777778 }
+  };
 
   if (deviceId) {
     constraints.deviceId = { exact: deviceId };
@@ -301,36 +348,36 @@ function buildVideoConstraints(deviceId = null) {
 }
 
 function buildAudioConstraints(deviceId = null, fallback = false) {
-  const constraints = isLowAudioProfileEnabled()
-    ? {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    : {
-        echoCancellation: true,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: { ideal: 1, max: 1 },
-        sampleRate: { ideal: 48000 },
-        sampleSize: { ideal: 16 }
-      };
+  const captureConfig = {
+    ...getAudioFilterInputState(),
+    channelCount: { ideal: parseChannelCountFromUi(), max: parseChannelCountFromUi() },
+    sampleRate: { ideal: parseSampleRateFromUi() },
+    sampleSize: { ideal: parseBitDepthFromUi() }
+  };
 
-  if (!isLowAudioProfileEnabled() && fallback) {
-    delete constraints.channelCount;
-    delete constraints.sampleRate;
-    delete constraints.sampleSize;
+  if (fallback) {
+    const fallbackConfig = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    };
+
+    if (deviceId) {
+      fallbackConfig.deviceId = { exact: deviceId };
+    }
+
+    return fallbackConfig;
   }
 
   if (deviceId) {
-    constraints.deviceId = { exact: deviceId };
+    captureConfig.deviceId = { exact: deviceId };
   }
 
-  return constraints;
+  return captureConfig;
 }
 
 function getPreferredAudioBitrateBps() {
-  return isLowAudioProfileEnabled() ? AUDIO_BITRATE_SPEECH_BPS : AUDIO_BITRATE_MUSIC_BPS;
+  return getAudioBitrateBps();
 }
 
 function applyAudioSenderEncodingPreferences(audioSender) {
@@ -383,12 +430,118 @@ async function getAudioInputStream(deviceId = null) {
   try {
     return await navigator.mediaDevices.getUserMedia({ audio: primaryConstraints });
   } catch (err) {
-    if (isLowAudioProfileEnabled()) {
-      throw err;
-    }
-
     const fallbackConstraints = buildAudioConstraints(deviceId, true);
     return await navigator.mediaDevices.getUserMedia({ audio: fallbackConstraints });
+  }
+}
+
+async function executeAutomatedAudioSwap() {
+  if (!localStream || isMediaChanging) return;
+
+  isMediaChanging = true;
+
+  try {
+    const currentAudioTracks = localStream.getAudioTracks();
+    currentAudioTracks.forEach(track => {
+      localStream.removeTrack(track);
+      track.stop();
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      audio: buildAudioConstraints(audioSource.value || null, false)
+    });
+    const newAudioTrack = newStream.getAudioTracks()[0];
+
+    if (!newAudioTrack) {
+      throw new Error('No audio track returned for the selected hardware profile.');
+    }
+
+    const isCurrentlyMuted = muteBtn.getAttribute('data-muted') === 'true';
+    newAudioTrack.enabled = !isCurrentlyMuted;
+    localStream.addTrack(newAudioTrack);
+
+    if (peerConnection) {
+      const audioSender = peerConnection.getSenders().find(sender => sender.track && sender.track.kind === 'audio');
+      if (audioSender) {
+        await audioSender.replaceTrack(newAudioTrack);
+        applyAudioSenderEncodingPreferences(audioSender);
+      }
+    }
+
+    webRtcDebugger.start(peerConnection, localStream);
+    await pushAudioEncodingParameters();
+  } catch (err) {
+    console.error('Audio configuration update failed:', err);
+    alert('Could not apply the selected audio configuration.');
+  } finally {
+    isMediaChanging = false;
+  }
+}
+
+async function executeAutomatedVideoScale() {
+  if (!localStream) return;
+
+  try {
+    const videoTracks = localStream.getVideoTracks();
+    if (!videoTracks || videoTracks.length === 0) return;
+
+    await videoTracks[0].applyConstraints(buildVideoConstraints());
+    await pushNetworkEncodingParameters();
+  } catch (err) {
+    console.error('Video configuration update failed:', err);
+    alert('Could not apply the selected video configuration.');
+  }
+}
+
+async function pushNetworkEncodingParameters() {
+  if (!peerConnection) return;
+
+  const videoSender = peerConnection.getSenders().find(sender => sender.track && sender.track.kind === 'video');
+  if (!videoSender) return;
+
+  try {
+    const params = videoSender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+
+    const selectedFps = Number.parseFloat((videoFps && videoFps.value) || '30');
+    const selectedBitrateBps = getVideoBitrateBps();
+    const degradationPreference = videoDegradation && videoDegradation.value === 'Maintain Resolution'
+      ? 'maintain-resolution'
+      : videoDegradation && videoDegradation.value === 'Balanced Mode'
+        ? 'balanced'
+        : 'maintain-framerate';
+
+    params.encodings[0].maxFramerate = Number.isFinite(selectedFps) && selectedFps > 0 ? selectedFps : 30;
+    params.encodings[0].maxBitrate = Number.isFinite(selectedBitrateBps) && selectedBitrateBps > 0 ? selectedBitrateBps : 2000000;
+    params.degradationPreference = degradationPreference;
+
+    await videoSender.setParameters(params);
+  } catch (err) {
+    console.error('Video sender parameter error:', err);
+  }
+}
+
+async function pushAudioEncodingParameters() {
+  if (!peerConnection) return;
+
+  const audioSender = peerConnection.getSenders().find(sender => sender.track && sender.track.kind === 'audio');
+  if (!audioSender) return;
+
+  try {
+    const params = audioSender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+
+    const selectedBitrateBps = getAudioBitrateBps();
+    params.encodings[0].maxBitrate = Number.isFinite(selectedBitrateBps) && selectedBitrateBps > 0 ? selectedBitrateBps : 256000;
+    await audioSender.setParameters(params);
+  } catch (err) {
+    console.error('Audio sender parameter error:', err);
   }
 }
 
@@ -419,6 +572,7 @@ async function applyVideoSourceById(videoDeviceId = null) {
     const videoSender = senders.find(s => s.track && s.track.kind === 'video');
     if (videoSender) {
       await videoSender.replaceTrack(newVideoTrack);
+      await pushNetworkEncodingParameters();
     }
   }
 }
@@ -450,9 +604,13 @@ async function applyAudioSourceById(audioDeviceId = null) {
     if (audioSender) {
       await audioSender.replaceTrack(newAudioTrack);
       applyAudioSenderEncodingPreferences(audioSender);
+      await pushAudioEncodingParameters();
     }
   }
+
+  webRtcDebugger.start(peerConnection, localStream);
 }
+// STREAM SETTINGS END
 
 function updateViewportLayoutMetrics() {
   const visualViewport = window.visualViewport;
@@ -976,10 +1134,6 @@ async function init() {
     try {
       localStream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
-      if (isLowAudioProfileEnabled()) {
-        throw err;
-      }
-
       localStream = await navigator.mediaDevices.getUserMedia({
         video: buildVideoConstraints(),
         audio: buildAudioConstraints(null, true)
@@ -1027,8 +1181,8 @@ function createPeerConnection(roomName) {
     const videoSender = peerConnection.addTrack(videoTrack, localStream);
     const videoParameters = videoSender.getParameters();
     videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
-      ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'low', maxBitrate: 400000 }))
-      : [{ priority: 'low', maxBitrate: 400000 }];
+      ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'high', maxBitrate: getVideoBitrateBps() }))
+      : [{ priority: 'high', maxBitrate: getVideoBitrateBps() }];
     videoParameters.degradationPreference = 'maintain-framerate';
     videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
   }
@@ -1337,6 +1491,47 @@ sizeBtn.addEventListener('click', () => {
   persistPipLayout();
 });
 
+const audioSettingsControls = [
+  audioSampleRate,
+  audioBitDepth,
+  audioChannels,
+  ...Array.from(document.querySelectorAll('#deviceSelector .device-section:first-of-type .device-toggle input')).slice(0, 3),
+  audioBitrateCeiling
+];
+
+const videoSettingsControls = [
+  videoResolution,
+  videoFps,
+  videoDegradation,
+  videoBitrateCeiling
+];
+
+audioSettingsControls.filter(Boolean).forEach(control => {
+  control.addEventListener('change', async () => {
+    if (!localStream) return;
+
+    if (control === audioBitrateCeiling) {
+      await pushAudioEncodingParameters();
+      return;
+    }
+
+    await executeAutomatedAudioSwap();
+  });
+});
+
+videoSettingsControls.filter(Boolean).forEach(control => {
+  control.addEventListener('change', async () => {
+    if (!localStream) return;
+
+    if (control === videoFps || control === videoBitrateCeiling || control === videoDegradation) {
+      await pushNetworkEncodingParameters();
+      return;
+    }
+
+    await executeAutomatedVideoScale();
+  });
+});
+
 roomKeyInput.addEventListener('input', persistRoomKey);
 roomKeyInput.addEventListener('change', persistRoomKey);
 
@@ -1387,28 +1582,6 @@ audioSource.addEventListener('change', async (event) => {
   } catch (err) {
     console.error('Failed to switch microphone source:', err);
     alert('Could not switch to the selected microphone hardware.');
-  }
-});
-
-audioProfileLowToggle.addEventListener('change', async () => {
-  if (!localStream) return;
-
-  try {
-    await applyAudioSourceById(audioSource.value || null);
-  } catch (err) {
-    console.error('Failed to apply audio profile:', err);
-    alert('Could not apply the selected audio profile.');
-  }
-});
-
-videoProfileLowToggle.addEventListener('change', async () => {
-  if (!localStream) return;
-
-  try {
-    await applyVideoSourceById(videoSource.value || null);
-  } catch (err) {
-    console.error('Failed to apply video profile:', err);
-    alert('Could not apply the selected video profile.');
   }
 });
 
