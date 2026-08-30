@@ -141,7 +141,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.4.2';
+const APP_VERSION = 'v0.4.3';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const AUDIO_BITRATE_SPEECH_BPS = 128000;
@@ -188,6 +188,7 @@ let viewportMetricsRafId = 0;
 let elapsedTimerId = 0;
 let elapsedTimerStartedAt = 0;
 let isMediaChanging = false;
+const STALE_ROOM_TTL_MS = 45000;
 
 function formatElapsedTime(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -955,7 +956,59 @@ async function claimRoleSlot(roomName, role, sessionId) {
   return claimResult.committed;
 }
 
+async function cleanupStaleRoomState(roomName) {
+  if (!roomName) return;
+
+  const roomRef = ref(db, `rooms/${roomName}`);
+  const roomSnapshot = await get(roomRef);
+  if (!roomSnapshot.exists()) return;
+
+  const roomData = roomSnapshot.val() || {};
+  const participants = roomData.participants || {};
+  const stalePaths = [];
+  const now = Date.now();
+
+  Object.entries(participants).forEach(([role, participant]) => {
+    if (!participant || !participant.sessionId || !participant.updatedAt) return;
+    if (activeSessionId && participant.sessionId === activeSessionId) return;
+    if (now - participant.updatedAt > STALE_ROOM_TTL_MS) {
+      stalePaths.push(ref(db, `rooms/${roomName}/participants/${role}`));
+    }
+  });
+
+  const offerData = roomData.offer || null;
+  if (offerData && offerData.sessionId && (!activeSessionId || offerData.sessionId !== activeSessionId) && offerData.updatedAt && now - offerData.updatedAt > STALE_ROOM_TTL_MS) {
+    stalePaths.push(ref(db, `rooms/${roomName}/offer`));
+  }
+
+  const answerData = roomData.answer || null;
+  if (answerData && answerData.sessionId && (!activeSessionId || answerData.sessionId !== activeSessionId) && answerData.updatedAt && now - answerData.updatedAt > STALE_ROOM_TTL_MS) {
+    stalePaths.push(ref(db, `rooms/${roomName}/answer`));
+  }
+
+  if (roomData.callerCandidates && Object.keys(roomData.callerCandidates).length > 0) {
+    const staleCallerCandidates = Object.entries(roomData.callerCandidates)
+      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && candidateData.updatedAt && now - candidateData.updatedAt > STALE_ROOM_TTL_MS)
+      .map(([candidateId]) => ref(db, `rooms/${roomName}/callerCandidates/${candidateId}`));
+    stalePaths.push(...staleCallerCandidates);
+  }
+
+  if (roomData.calleeCandidates && Object.keys(roomData.calleeCandidates).length > 0) {
+    const staleCalleeCandidates = Object.entries(roomData.calleeCandidates)
+      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && candidateData.updatedAt && now - candidateData.updatedAt > STALE_ROOM_TTL_MS)
+      .map(([candidateId]) => ref(db, `rooms/${roomName}/calleeCandidates/${candidateId}`));
+    stalePaths.push(...staleCalleeCandidates);
+  }
+
+  if (stalePaths.length === 0) return;
+
+  await Promise.allSettled(stalePaths.map(pathRef => remove(pathRef)));
+  statusText.innerText = 'Recovered stale room state.';
+}
+
 async function evaluateRoomAction(roomName) {
+  await cleanupStaleRoomState(roomName);
+
   const roomSnapshot = await get(ref(db, `rooms/${roomName}`));
   if (!roomSnapshot.exists()) {
     return { mode: 'start' };
@@ -1223,6 +1276,7 @@ function createPeerConnection(roomName) {
       const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
       set(candRef, {
         sessionId: activeSessionId,
+        updatedAt: Date.now(),
         candidate: event.candidate.toJSON()
       }).catch(err => {
         console.error('Failed to publish ICE candidate:', err);
@@ -1285,6 +1339,7 @@ async function beginStartRoom(roomName) {
     const offerRef = ref(db, `rooms/${roomName}/offer`);
     await set(offerRef, {
       sessionId: activeSessionId,
+      updatedAt: Date.now(),
       sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
     });
 
@@ -1414,6 +1469,7 @@ function listenToRoom(roomName) {
         const answerRef = ref(db, `rooms/${roomName}/answer`);
         await set(answerRef, {
           sessionId: activeSessionId,
+          updatedAt: Date.now(),
           sdp: { type: localAnswerDescription.type, sdp: localAnswerDescription.sdp }
         });
         statusText.innerText = 'Answer transmitted. Syncing streams...';
