@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', handleMediaLayoutChange);
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
 import { getDatabase, get, ref, runTransaction, set, onChildAdded, onValue, remove, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyB2F_QfZFAwitJrFEcvCTadOsLOVETkRpg',
@@ -52,6 +53,12 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const auth = getAuth(app);
+
+signInAnonymously(auth).catch((error) => {
+  console.error('Firebase anonymous sign-in failed:', error);
+  setStatusText('Could not authenticate to Firebase. Please enable Anonymous sign-in in Firebase Authentication.');
+});
 
 let localStream;
 let remoteStream = null;
@@ -134,7 +141,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.4.1';
+const APP_VERSION = 'v0.4.2';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const AUDIO_BITRATE_SPEECH_BPS = 128000;
