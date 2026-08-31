@@ -1076,17 +1076,19 @@ function closePeerConnection() {
   remoteIceQueue = [];
 }
 
+function getRoomCleanupRefs(roomName, role) {
+  if (!roomName || !role) return [];
+
+  const { offer, candidates, participant } = getRoomCleanupPaths(roomName, role);
+  return [ref(db, offer), ref(db, candidates), ref(db, participant)];
+}
+
 async function cleanupRoomArtifacts() {
   if (!activeRoomName || !localParticipantRole) return;
 
-  const { offer, candidates, participant } = getRoomCleanupPaths(activeRoomName, localParticipantRole);
-  const cleanupTasks = [
-    remove(ref(db, offer)),
-    remove(ref(db, candidates)),
-    remove(ref(db, participant))
-  ];
-
-  await Promise.allSettled(cleanupTasks);
+  await Promise.allSettled(
+    getRoomCleanupRefs(activeRoomName, localParticipantRole).map(pathRef => remove(pathRef))
+  );
 }
 
 async function resetCallSession(statusMessage) {
@@ -1598,63 +1600,49 @@ videoSettingsControls.filter(Boolean).forEach(control => {
 roomKeyInput.addEventListener('input', persistRoomKey);
 roomKeyInput.addEventListener('change', persistRoomKey);
 
-videoSource.addEventListener('pointerdown', (event) => {
-  markDeviceSelectorOpen(event.target);
+function bindDeviceSourceEvents(selectElement, { label, sourceApplier }) {
+  if (!selectElement) return;
+
+  selectElement.addEventListener('pointerdown', (event) => {
+    markDeviceSelectorOpen(event.target);
+  });
+
+  selectElement.addEventListener('click', (event) => {
+    handleDeviceSelectorClick(event.target);
+  });
+
+  selectElement.addEventListener('change', async (event) => {
+    if (!localStream) return;
+
+    syncSelectedDeviceTitles();
+    collapseDeviceSelector(event.target);
+
+    const deviceId = event.target.value;
+    if (!deviceId) return;
+
+    try {
+      await sourceApplier(deviceId);
+    } catch (err) {
+      console.error(`Failed to switch ${label} source:`, err);
+      alert(`Could not switch to the selected ${label} hardware.`);
+    }
+  });
+}
+
+bindDeviceSourceEvents(videoSource, {
+  label: 'camera',
+  sourceApplier: applyVideoSourceById
 });
 
-videoSource.addEventListener('click', (event) => {
-  handleDeviceSelectorClick(event.target);
-});
-
-videoSource.addEventListener('change', async (event) => {
-  if (!localStream) return;
-
-  syncSelectedDeviceTitles();
-  collapseDeviceSelector(event.target);
-
-  const videoDeviceId = event.target.value;
-  if (!videoDeviceId) return;
-
-  try {
-    await applyVideoSourceById(videoDeviceId);
-  } catch (err) {
-    console.error('Failed to switch camera source:', err);
-    alert('Could not switch to the selected camera hardware.');
-  }
-});
-
-audioSource.addEventListener('pointerdown', (event) => {
-  markDeviceSelectorOpen(event.target);
-});
-
-audioSource.addEventListener('click', (event) => {
-  handleDeviceSelectorClick(event.target);
-});
-
-audioSource.addEventListener('change', async (event) => {
-  if (!localStream) return;
-
-  syncSelectedDeviceTitles();
-  collapseDeviceSelector(event.target);
-
-  const audioDeviceId = event.target.value;
-  if (!audioDeviceId) return;
-
-  try {
-    await applyAudioSourceById(audioDeviceId);
-  } catch (err) {
-    console.error('Failed to switch microphone source:', err);
-    alert('Could not switch to the selected microphone hardware.');
-  }
+bindDeviceSourceEvents(audioSource, {
+  label: 'microphone',
+  sourceApplier: applyAudioSourceById
 });
 
 function cleanupRoomOnExit() {
   if (!activeRoomName || !localParticipantRole) return;
 
-  const { offer, candidates, participant } = getRoomCleanupPaths(activeRoomName, localParticipantRole);
-  remove(ref(db, offer));
-  remove(ref(db, candidates));
-  remove(ref(db, participant));
+  getRoomCleanupRefs(activeRoomName, localParticipantRole).forEach(pathRef => remove(pathRef));
 }
 
 window.addEventListener('beforeunload', cleanupRoomOnExit);
