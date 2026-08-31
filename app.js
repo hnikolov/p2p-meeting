@@ -141,9 +141,10 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.4.3';
+const APP_VERSION = 'v0.4.4';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
+const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
 const AUDIO_BITRATE_SPEECH_BPS = 128000;
 const AUDIO_BITRATE_MUSIC_BPS = 256000;
 
@@ -700,6 +701,74 @@ function restorePipLayout() {
   }
 }
 
+function setSelectValueIfPresent(selectElement, value) {
+  if (!selectElement || !value) return;
+
+  const hasExactMatch = Array.from(selectElement.options || []).some(option => option.value === value);
+  if (hasExactMatch) {
+    selectElement.value = value;
+  }
+}
+
+function persistDeviceSettings() {
+  try {
+    const payload = {
+      audio: {
+        sampleRate: (audioSampleRate && audioSampleRate.value) || '48000 Hz',
+        bitDepth: (audioBitDepth && audioBitDepth.value) || '16-bit',
+        channels: (audioChannels && audioChannels.value) || 'Mono',
+        bitrateCeiling: (audioBitrateCeiling && audioBitrateCeiling.value) || '256 kbps',
+        filters: getAudioFilterInputState()
+      },
+      video: {
+        resolution: (videoResolution && videoResolution.value) || '360p',
+        fps: (videoFps && videoFps.value) || '15 FPS',
+        degradation: (videoDegradation && videoDegradation.value) || 'Balanced Mode',
+        bitrateCeiling: (videoBitrateCeiling && videoBitrateCeiling.value) || '500 kbps'
+      }
+    };
+
+    localStorage.setItem(DEVICE_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function restoreDeviceSettings() {
+  try {
+    const raw = localStorage.getItem(DEVICE_SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+
+    const parsed = JSON.parse(raw);
+    const audioSettings = parsed && parsed.audio ? parsed.audio : {};
+    const videoSettings = parsed && parsed.video ? parsed.video : {};
+    const filterState = audioSettings.filters && typeof audioSettings.filters === 'object' ? audioSettings.filters : {};
+
+    setSelectValueIfPresent(audioSampleRate, audioSettings.sampleRate);
+    setSelectValueIfPresent(audioBitDepth, audioSettings.bitDepth);
+    setSelectValueIfPresent(audioChannels, audioSettings.channels);
+    setSelectValueIfPresent(audioBitrateCeiling, audioSettings.bitrateCeiling);
+
+    const filterInputs = Array.from(document.querySelectorAll('#deviceSelector .device-section .device-toggle input')).slice(0, 3);
+    if (typeof filterState.echoCancellation === 'boolean') {
+      filterInputs[0].checked = filterState.echoCancellation;
+    }
+    if (typeof filterState.noiseSuppression === 'boolean') {
+      filterInputs[1].checked = filterState.noiseSuppression;
+    }
+    if (typeof filterState.autoGainControl === 'boolean') {
+      filterInputs[2].checked = filterState.autoGainControl;
+    }
+
+    setSelectValueIfPresent(videoResolution, videoSettings.resolution);
+    setSelectValueIfPresent(videoFps, videoSettings.fps);
+    setSelectValueIfPresent(videoDegradation, videoSettings.degradation);
+    setSelectValueIfPresent(videoBitrateCeiling, videoSettings.bitrateCeiling);
+  } catch {
+    // Ignore invalid / corrupt storage.
+  }
+}
+
 async function registerPwaServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     return;
@@ -1148,6 +1217,7 @@ setPipControlsEnabled(false);
 setElapsedTimeMs(0);
 restoreRoomKey();
 restorePipLayout();
+restoreDeviceSettings();
 updateViewportLayoutMetrics();
 applyPipLayoutState();
 updateToggleButtonVisuals();
@@ -1573,6 +1643,8 @@ const videoSettingsControls = [
 
 audioSettingsControls.filter(Boolean).forEach(control => {
   control.addEventListener('change', async () => {
+    persistDeviceSettings();
+
     if (!localStream) return;
 
     if (control === audioBitrateCeiling) {
@@ -1586,6 +1658,8 @@ audioSettingsControls.filter(Boolean).forEach(control => {
 
 videoSettingsControls.filter(Boolean).forEach(control => {
   control.addEventListener('change', async () => {
+    persistDeviceSettings();
+
     if (!localStream) return;
 
     if (control === videoFps || control === videoBitrateCeiling || control === videoDegradation) {
