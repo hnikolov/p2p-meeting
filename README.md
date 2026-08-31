@@ -23,37 +23,45 @@ Available [here](https://hnikolov.github.io/p2p-meeting)
 
 ---
 
-## ⚙️ Configuration Setup
+## ⚙️ Firebase Setup
 
-Before deploying to GitHub Pages or running locally, you must link your own free Firebase database configuration.
+Before deploying to GitHub Pages or running locally, configure a Firebase project for the signaling database and enable the minimum secure access needed for browser-based peers.
 
 1. Go to the [Firebase Console](https://console.firebase.google.com/).
-2. Click Add project, name it (e.g., p2p-meeting), and disable Google Analytics.
-3. Click the **Web (</>)** icon to register a web app. Name it and click Register app.
-4. Copy your `firebaseConfig` object and overwrite the placeholder inside `index.html`:
+2. Create a project (for example, `p2p-meeting`) and disable Google Analytics unless you want it enabled for other reasons.
+3. Open the project and register a web app from the project overview page.
+4. Copy the generated `firebaseConfig` values and place them in the browser app configuration used by this project.
 
 ```javascript
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
+  apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
   databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.REGION.firebasedatabase.app",
-    projectId: "YOUR_PROJECT_ID",
+  projectId: "YOUR_PROJECT_ID",
   storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID"
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
 ```
 
-5. In your Firebase Left Sidebar, click **Build** > **Realtime Database** -> **Create Database**.
-6. Set the rules to **Test Mode** and click **Enable** so that both peers can read/write connection tokens freely:
+5. In Firebase, open **Build** > **Authentication** > **Sign-in method** and enable **Anonymous**.
+6. Open **Build** > **Realtime Database** and create the database.
+7. Set the database rules to authenticated access scoped to the room tree:
+
 ```json
 {
   "rules": {
-    ".read": "true",
-    ".write": "true"
+    "rooms": {
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    }
   }
 }
 ```
+
+This is the recommended pattern for a browser-based WebRTC signaling app: anonymous clients authenticate with Firebase, and each room is limited to authenticated reads and writes. The app performs this anonymous authentication automatically when it starts, which keeps the signaling flow simple for peer-to-peer meetings while avoiding the insecure global open-database model.
 
 ---
 
@@ -70,12 +78,14 @@ python -m http.server 8000
 Then navigate your browser to `http://localhost:8000`.
 
 ### 📱 PWA Install Mode (Fullscreen App)
-This project now includes a PWA setup modeled after your working pattern:
+This project now includes a PWA setup modeled after the following working pattern:
 
 * `manifest.json` for app metadata and install prompts.
 * `sw.js` service worker with versioned cache + stale cache cleanup.
 * App icons: `icon.svg`, `icon-192.png`, `icon-512.png`.
 * Mobile app meta tags in `index.html` (`theme-color`, Apple standalone tags).
+
+The install entry point is the top-level `index.html` page, while the application logic is loaded from the separate JavaScript module, so the service worker and install metadata are still rooted at the app entry page rather than the script file itself.
 
 Important requirements:
 
@@ -90,16 +100,13 @@ Install flow:
 3. On iOS Safari, use **Share** -> **Add to Home Screen**.
 4. Launch from the home-screen icon to run without browser controls.
 
-### ⚠️ Corporate Network Note
-Corporate networks and proxies often intercept outbound CDN scripts (`gstatic.com`) or block streaming UDP traffic entirely. For development on work laptops, make sure you download `firebase-app.js` and `firebase-database.js` locally to your root folder as configured in the scripts. For testing the actual call connection, ensure both devices are connected to less restrictive consumer/home networks.
+### ⚠️ Important Implementation Detail: Parameter Tuning
+Audio and network settings are handled through two distinct mechanisms because browser media engines behave differently depending on what is being changed.
 
-### ⚠️ Known Issue: Some Phone Connections
-Laptop-to-laptop browser sessions are currently stable and fully functional. Some laptop-to-phone and phone-to-phone sessions can fail during ICE negotiation (for example: selected pair remains unavailable and media packet counters stay at zero), which results in no remote media and eventual call failure.
+- Audio hardware constraints such as sample rate, channel count, bit depth, and capture filters must be applied through a controlled teardown-and-rebuild cycle: the active audio track is stopped and removed, a 50ms delay is allowed for the OS driver lock to clear, then a fresh audio stream is created with `getUserMedia()`, and the new track is swapped into the active sender via `replaceTrack()`. This avoids the browser/OS lockups that occur when constraints are mutated directly on a live track.
+- Network-side adjustments such as max FPS, video bitrate, audio bitrate, and degradation preference are updated live on the active RTCRtpSender using `setParameters()` without renegotiating the peer connection. This preserves the call while changing the transmission profile on the fly.
 
-This appears to depend on mobile network/NAT behavior and relay reachability rather than the room signaling flow itself. If you must test mobile interoperability, prefer:
-1. Devices on the same Wi-Fi network.
-2. A dedicated, production-grade TURN service with your own credentials.
-3. Browser versions with WebRTC support fully up to date.
+This split is important because direct updates to live capture constraints are not always reliable across Chromium and OS audio drivers, while dynamic sender parameter updates are the correct path for transmission tuning.
 
 ---
 
