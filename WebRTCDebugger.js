@@ -8,6 +8,7 @@ class WebRTCDebugger {
     this.intervalToken = null;
     this.audioCtx = null;
     this.analyserNode = null;
+    this.remoteAnalyserNode = null;
     this.animationToken = null;
     this.hudElement = null;
     this.isMonitoring = false;
@@ -142,6 +143,7 @@ class WebRTCDebugger {
     this.isMonitoring = true;
     this.bindToggleKey();
     this.setupAudioAnalyzer(localStream);
+    this.startMeterLoop();
 
     this.intervalToken = setInterval(async () => {
       if (!this.isMonitoring || !localStream) return;
@@ -212,8 +214,6 @@ class WebRTCDebugger {
                 this.updateDOMText('hud-rx-audio-lost', report.packetsLost !== undefined ? report.packetsLost.toString() : '-');
                 this.updateDOMText('hud-rx-audio-jitter', report.jitter ? `${(report.jitter * 1000).toFixed(1)} ms` : '-');
                 this.computeBitrate('hud-rx-audio-kbps', report.bytesReceived, 'rxAudioBytes', 'rxAudioTime', now);
-                // Inbound track level parsing hook
-                this.updateDOMText('hud-rx-audio-lvl', report.audioLevel !== undefined ? report.audioLevel.toFixed(4) : '0.0000');
               } else if (report.kind === 'video') {
                 this.updateDOMText('hud-rx-video-res', report.frameWidth ? `${report.frameWidth}x${report.frameHeight}` : '-');
                 this.updateDOMText('hud-rx-video-fps', report.framesPerSecond ?? '-');
@@ -251,6 +251,26 @@ class WebRTCDebugger {
     this[byteStoreKey] = currentBytes || 0;
   }
 
+  // Called by app.js with the AnalyserNode tapped off the remote Web Audio
+  // graph; getStats() inbound-rtp.audioLevel isn't reliable once the track
+  // is consumed via Web Audio instead of an HTMLMediaElement.
+  setRemoteAudioAnalyser(analyserNode) {
+    this.remoteAnalyserNode = analyserNode;
+  }
+
+  #computeRms(analyserNode) {
+    const bufferLength = analyserNode.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyserNode.getByteTimeDomainData(dataArray);
+
+    let sumSquares = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      const norm = (dataArray[i] - 128) / 128;
+      sumSquares += norm * norm;
+    }
+    return Math.sqrt(sumSquares / bufferLength);
+  }
+
   setupAudioAnalyzer(stream) {
     if (!stream || stream.getAudioTracks().length === 0) return;
     try {
@@ -259,29 +279,31 @@ class WebRTCDebugger {
       this.analyserNode = this.audioCtx.createAnalyser();
       this.analyserNode.fftSize = 256;
       source.connect(this.analyserNode);
+    } catch (e) { console.warn(e); }
+  }
 
-      const drawBar = () => {
-        if (!this.isMonitoring || !this.analyserNode) return;
-        const bufferLength = this.analyserNode.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        this.analyserNode.getByteTimeDomainData(dataArray);
+  startMeterLoop() {
+    const drawBar = () => {
+      if (!this.isMonitoring) return;
 
-        let sumSquares = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          const norm = (dataArray[i] - 128) / 128;
-          sumSquares += norm * norm;
-        }
-        const rms = Math.sqrt(sumSquares / bufferLength);
+      if (this.analyserNode) {
+        const rms = this.#computeRms(this.analyserNode);
         const numEl = document.getElementById('hud-audio-mic-num');
         const fillEl = document.getElementById('hud-audio-vubar');
         if (numEl && fillEl) {
           numEl.innerText = rms.toFixed(4);
           fillEl.style.width = `${Math.min(100, Math.floor(rms * 160))}%`;
         }
-        this.animationToken = requestAnimationFrame(drawBar);
-      };
+      }
+
+      if (this.remoteAnalyserNode) {
+        const rms = this.#computeRms(this.remoteAnalyserNode);
+        this.updateDOMText('hud-rx-audio-lvl', rms.toFixed(4));
+      }
+
       this.animationToken = requestAnimationFrame(drawBar);
-    } catch (e) { console.warn(e); }
+    };
+    this.animationToken = requestAnimationFrame(drawBar);
   }
 
   updateDOMText(id, value, color = null) {
@@ -302,6 +324,6 @@ class WebRTCDebugger {
 
     const el = document.getElementById('webrtc-expert-hud');
     if (el) el.remove();
-    this.intervalToken = null; this.audioCtx = null; this.analyserNode = null; this.hudElement = null;
+    this.intervalToken = null; this.audioCtx = null; this.analyserNode = null; this.remoteAnalyserNode = null; this.hudElement = null;
   }
 }

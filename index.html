@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="P2P Meeting">
-<title>P2P Meeting via Secret Key</title>
+<title>P2P Meeting</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -142,6 +142,15 @@ body {
 }
 .bottom-card-center {
   justify-content: center;
+  gap: 10px;
+}
+.toggle-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.toggle-pair + .toggle-pair {
+  margin-left: 8px;
 }
 .bottom-card-right {
   justify-content: flex-end;
@@ -291,6 +300,176 @@ body {
   min-height: 42px;
 }
 
+.device-range-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.device-range-row input[type="range"] {
+  flex: 1 1 auto;
+  accent-color: #1a73e8;
+}
+
+.device-range-value {
+  min-width: 42px;
+  color: #e8eaed;
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.speaker-eq-panel {
+  background: rgba(34, 36, 40, 0.96);
+  border: 1px solid #3c4043;
+  border-radius: 10px;
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.speaker-eq-panel h4 {
+  margin: 0;
+  color: #f1f3f4;
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.speaker-eq-row {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.speaker-preset-list {
+  width: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.speaker-preset-btn {
+  width: 100%;
+  background: transparent;
+  color: #dfe1e5;
+  border: none;
+  padding: 6px 8px 6px 0;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  text-align: left;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.speaker-preset-btn svg {
+  width: 18px;
+  height: 18px;
+  color: #dfe1e5;
+  flex-shrink: 0;
+}
+
+.speaker-preset-btn.active {
+  color: #f1f3f4;
+  background: rgba(26, 115, 232, 0.12);
+}
+
+.speaker-preset-btn.active svg {
+  color: #8ab4f8;
+}
+
+.speaker-slider-row {
+  display: flex;
+  flex: 1;
+  justify-content: space-around;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.speaker-slider-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: #dfe1e5;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 0;
+  width: 42px;
+}
+
+.speaker-eq-slider {
+  --speaker-thumb-size: 16px;
+  --speaker-track-width: 10px;
+  --speaker-thumb-shift: -4px;
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--speaker-track-width);
+  height: 120px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  background: transparent;
+  accent-color: #1a73e8;
+  margin: 0 auto;
+  padding: 0;
+  cursor: pointer;
+  display: block;
+  position: relative;
+}
+
+.speaker-eq-slider::-webkit-slider-runnable-track {
+  width: var(--speaker-track-width);
+  height: 120px;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02));
+  border-radius: 999px;
+  border: 1px solid #5f6368;
+  box-sizing: border-box;
+}
+
+.speaker-eq-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--speaker-thumb-size);
+  height: var(--speaker-thumb-size);
+  border-radius: 50%;
+  background: #34a853;
+  border: 2px solid #1f2d1f;
+  box-shadow: 0 0 0 2px rgba(52,168,83,0.14);
+  margin: 0;
+  transform: translateX(var(--speaker-thumb-shift));
+}
+
+.speaker-eq-slider::-moz-range-track {
+  width: var(--speaker-track-width);
+  height: 120px;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02));
+  border-radius: 999px;
+  border: 1px solid #5f6368;
+  box-sizing: border-box;
+}
+
+.speaker-eq-slider::-moz-range-thumb {
+  width: var(--speaker-thumb-size);
+  height: var(--speaker-thumb-size);
+  border-radius: 50%;
+  background: #34a853;
+  border: 2px solid #1f2d1f;
+  box-shadow: 0 0 0 2px rgba(52,168,83,0.14);
+  transform: translateX(var(--speaker-thumb-shift));
+}
+
+.speaker-eq-value {
+  min-width: 36px;
+  text-align: center;
+  color: #e8eaed;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Inputs & Buttons Base Layout */
 input[type="text"] {
   padding: 10px 12px;
@@ -330,11 +509,18 @@ button {
   transition: background 0.2s;
   padding: 10px 14px;
   white-space: nowrap;
+  letter-spacing: 0.5px;
 }
 .btn-call,
 .btn-control {
   width: 110px;
   min-width: 110px;
+}
+
+.btn-control-compact {
+  width: 58px;
+  min-width: 58px;
+  padding: 8px 6px;
 }
 
 .btn-call { background: #1a73e8; }
@@ -346,17 +532,24 @@ button {
   font-size: 13px;
   text-align: center;
 }
-#muteBtn { background: #ea4335; }
+#speakerBtn { background: #dd6e13; }
+#muteBtn { background: #34a853; }
 #camBtn { background: #1a73e8; }
 .btn-toggle-active {
-  background: #34a853 !important;
+  background:  #ea4335 !important;
   color: #202124;
+}
+.btn-strikethrough {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-skip-ink: none;
 }
 .btn-settings-toggle {
   background: #3c4043;
   color: white;
   padding-bottom: 3px; /* Adjust vertical alignment for the arrow */
   width: 34px;
+  min-width: 34px;
   height: 34px;
   font-size: 18px;
   display: inline-flex;
@@ -522,8 +715,7 @@ button {
   </main>
 
   <footer class="app-footer">
-    <div id="deviceSelector" class="device-selector-card">
-      <div class="device-section">
+    <div id="microphoneDeviceSelector" class="device-selector-card">
         <h3 class="device-section-header">Microphone</h3>
 
         <div class="device-row device-row-compact" style="justify-content: stretch;">
@@ -573,9 +765,9 @@ button {
             </select>
           </div>
         </div>
-      </div>
+    </div>
 
-      <div class="device-section">
+    <div id="cameraDeviceSelector" class="device-selector-card">
         <h3 class="device-section-header">Camera &amp; Transport</h3>
 
         <div class="device-row device-row-compact" style="justify-content: stretch;">
@@ -621,7 +813,71 @@ button {
             </select>
           </div>
         </div>
-      </div>
+    </div>
+
+    <div id="speakerDeviceSelector" class="device-selector-card">
+        <h3 class="device-section-header">Speaker</h3>
+
+        <div class="device-row device-row-compact" style="justify-content: stretch;">
+          <div class="device-select-wrap device-select-wrap-wide" style="width: 100%;">
+            <select id="speakerOutput" class="device-select"></select>
+          </div>
+        </div>
+
+        <div class="speaker-eq-panel">
+          <h4>EQ &amp; Volume</h4>
+
+          <div class="speaker-eq-row">
+            <div class="speaker-preset-list" aria-label="EQ presets">
+              <button class="speaker-preset-btn active" type="button" data-preset="flat" aria-label="Flat preset">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 3 12 L 21 12" /></svg>
+                <span>Flat</span>
+              </button>
+              <button class="speaker-preset-btn" type="button" data-preset="acoustic" aria-label="Acoustic preset">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 3 15 C 8 15 9 7 12 7 C 15 7 16 15 21 15" /></svg>
+                <span>Acoustic</span>
+              </button>
+              <button class="speaker-preset-btn" type="button" data-preset="scooped" aria-label="Scooped preset">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 3 9 C 8 9 9 17 12 17 C 15 17 16 9 21 9" /></svg>
+                <span>Scooped</span>
+              </button>
+              <button class="speaker-preset-btn" type="button" data-preset="bass" aria-label="Bass preset">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 3 7 C 10 7 14 17 21 17" /></svg>
+                <span>Bass</span>
+              </button>
+              <button class="speaker-preset-btn" type="button" data-preset="treble" aria-label="Treble preset">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 3 17 C 10 17 14 7 21 7" /></svg>
+                <span>Treble</span>
+              </button>
+            </div>
+
+            <div class="speaker-slider-row">
+              <div class="speaker-slider-col">
+                <span>B</span>
+                <input id="speakerEqBass" class="speaker-eq-slider" type="range" min="-12" max="12" step="0.5" value="0" aria-label="Bass equalizer">
+                <span id="speakerEqBassValue" class="speaker-eq-value">0</span>
+              </div>
+
+              <div class="speaker-slider-col">
+                <span>M</span>
+                <input id="speakerEqMid" class="speaker-eq-slider" type="range" min="-12" max="12" step="0.5" value="0" aria-label="Mid equalizer">
+                <span id="speakerEqMidValue" class="speaker-eq-value">0</span>
+              </div>
+
+              <div class="speaker-slider-col">
+                <span>T</span>
+                <input id="speakerEqTreble" class="speaker-eq-slider" type="range" min="-12" max="12" step="0.5" value="0" aria-label="Treble equalizer">
+                <span id="speakerEqTrebleValue" class="speaker-eq-value">0</span>
+              </div>
+
+              <div class="speaker-slider-col">
+                <span>Vol</span>
+                <input id="speakerVolume" class="speaker-eq-slider" type="range" min="0" max="2" step="0.01" value="1" aria-label="Remote speaker volume">
+                <span id="speakerVolumeValue" class="speaker-eq-value">1.00</span>
+              </div>
+            </div>
+          </div>
+        </div>
     </div>
 
     <div class="bottom-bar">
@@ -632,9 +888,18 @@ button {
       </div>
 
       <div class="bottom-card bottom-card-center">
-        <button id="muteBtn" class="btn-control" data-muted="false" title="Mute toggle (Space)">Mute</button>
-        <button id="camBtn" class="btn-control" data-off="false" title="Camera toggle (C)">Camera off</button>
-        <button id="settingsToggleBtn" class="btn-settings-toggle" type="button" title="Toggle Hardware Selectors" aria-label="Toggle hardware selectors">⌃</button>
+        <div class="toggle-pair">
+          <button id="muteBtn" class="btn-control btn-control-compact" data-muted="false" title="Mute toggle (Space)">Mic</button>
+          <button id="microphoneSettingsToggleBtn" class="btn-settings-toggle settings-toggle-btn" type="button" title="Toggle Microphone Selector" aria-label="Toggle microphone selector">⌃</button>
+        </div>
+        <div class="toggle-pair">
+          <button id="camBtn" class="btn-control btn-control-compact" data-off="false" title="Camera toggle (C)">Cam</button>
+          <button id="cameraSettingsToggleBtn" class="btn-settings-toggle settings-toggle-btn" type="button" title="Toggle Camera Selector" aria-label="Toggle camera selector">⌃</button>
+        </div>
+        <div class="toggle-pair">
+          <button id="speakerBtn" class="btn-control btn-control-compact" data-muted="false" title="Speaker toggle">Spk</button>
+          <button id="speakerSettingsToggleBtn" class="btn-settings-toggle settings-toggle-btn" type="button" title="Toggle Microphone Selector" aria-label="Toggle microphone selector">⌃</button>
+        </div>
       </div>
 
       <div class="bottom-card bottom-card-right">

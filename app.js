@@ -1,14 +1,53 @@
-const settingsToggle = document.getElementById('settingsToggleBtn');
-const deviceSelector = document.getElementById('deviceSelector');
+const settingsToggles = Array.from(document.querySelectorAll('.settings-toggle-btn'));
+const microphoneDeviceSelector = document.getElementById('microphoneDeviceSelector');
+const cameraDeviceSelector = document.getElementById('cameraDeviceSelector');
+const speakerDeviceSelector = document.getElementById('speakerDeviceSelector');
 
-settingsToggle.addEventListener('click', (e) => {
-  e.stopPropagation();
-  deviceSelector.classList.toggle('active');
+function closeDeviceSelectors() {
+  [microphoneDeviceSelector, cameraDeviceSelector, speakerDeviceSelector].forEach((deviceSelector) => {
+    if (deviceSelector) {
+      deviceSelector.classList.remove('active');
+    }
+  });
+}
+
+settingsToggles.forEach((settingsToggle) => {
+  settingsToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+
+    const targetSelectorId = settingsToggle.id === 'microphoneSettingsToggleBtn'
+      ? 'microphoneDeviceSelector'
+      : settingsToggle.id === 'cameraSettingsToggleBtn'
+        ? 'cameraDeviceSelector'
+        : settingsToggle.id === 'speakerSettingsToggleBtn'
+          ? 'speakerDeviceSelector'
+          : null;
+
+    const targetSelector = targetSelectorId ? document.getElementById(targetSelectorId) : null;
+    if (!targetSelector) return;
+
+    const shouldOpen = !targetSelector.classList.contains('active');
+    closeDeviceSelectors();
+
+    if (shouldOpen) {
+      targetSelector.classList.add('active');
+    }
+  });
 });
 
 document.addEventListener('click', (e) => {
-  if (!deviceSelector.contains(e.target) && e.target !== settingsToggle) {
-    deviceSelector.classList.remove('active');
+  const clickedToggle = e.target.closest('.settings-toggle-btn');
+  if (clickedToggle) {
+    return;
+  }
+
+  // Muting or toggling the camera shouldn't close any panel if it's open.
+  if (e.target.closest('#speakerBtn')) { return; }
+  if (e.target.closest('#muteBtn'))    { return; }
+  if (e.target.closest('#camBtn'))     { return; }
+
+  if (!microphoneDeviceSelector?.contains(e.target) && !cameraDeviceSelector?.contains(e.target) && !speakerDeviceSelector?.contains(e.target)) {
+    closeDeviceSelectors();
   }
 });
 
@@ -117,6 +156,7 @@ const roomKeyInput = document.getElementById('roomKey');
 const callBtn = document.getElementById('callBtn');
 const muteBtn = document.getElementById('muteBtn');
 const camBtn = document.getElementById('camBtn');
+const speakerBtn = document.getElementById('speakerBtn');
 const statusText = document.getElementById('statusText');
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
@@ -127,6 +167,15 @@ const pipVideoLabel = document.getElementById('pipVideoLabel');
 const pipCard = document.getElementById('pipCard');
 const audioSource = document.getElementById('audioSource');
 const videoSource = document.getElementById('videoSource');
+const speakerOutput = document.getElementById('speakerOutput');
+const speakerVolume = document.getElementById('speakerVolume');
+const speakerVolumeValue = document.getElementById('speakerVolumeValue');
+const speakerEqBass = document.getElementById('speakerEqBass');
+const speakerEqMid = document.getElementById('speakerEqMid');
+const speakerEqTreble = document.getElementById('speakerEqTreble');
+const speakerEqBassValue = document.getElementById('speakerEqBassValue');
+const speakerEqMidValue = document.getElementById('speakerEqMidValue');
+const speakerEqTrebleValue = document.getElementById('speakerEqTrebleValue');
 const audioSampleRate = document.getElementById('audioSampleRate');
 const audioBitDepth = document.getElementById('audioBitDepth');
 const audioChannels = document.getElementById('audioChannels');
@@ -141,7 +190,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.4.4';
+const APP_VERSION = 'v0.5.0';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -290,7 +339,7 @@ startVideoTrackTelemetry();
 
 // STREAM SETTINGS START
 function getAudioFilterInputState() {
-  const filterInputs = Array.from(document.querySelectorAll('#deviceSelector .device-section .device-toggle input')).slice(0, 3);
+  const filterInputs = Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-section .device-toggle input')).slice(0, 3);
 
   return {
     echoCancellation: filterInputs[0] ? filterInputs[0].checked : true,
@@ -749,7 +798,7 @@ function restoreDeviceSettings() {
     setSelectValueIfPresent(audioChannels, audioSettings.channels);
     setSelectValueIfPresent(audioBitrateCeiling, audioSettings.bitrateCeiling);
 
-    const filterInputs = Array.from(document.querySelectorAll('#deviceSelector .device-section .device-toggle input')).slice(0, 3);
+    const filterInputs = Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-section .device-toggle input')).slice(0, 3);
     if (typeof filterState.echoCancellation === 'boolean') {
       filterInputs[0].checked = filterState.echoCancellation;
     }
@@ -786,6 +835,242 @@ async function registerPwaServiceWorker() {
   }
 }
 
+let remoteAudioGraph = null;
+let sharedAudioContext = null;
+let rememberedSpeakerVolume = 1;
+let speakerMuteSource = null;
+
+function clampRange(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function formatEqValue(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '0';
+
+  if (numeric === 0) return '0';
+  if (numeric === 12) return '+12';
+  if (numeric === -12) return '-12';
+  return `${numeric > 0 ? '+' : ''}${numeric.toFixed(1)}`;
+}
+
+// Created/resumed from the Call button click (a real user gesture) so it's
+// already running by the time the remote audio track arrives.
+function getOrCreateAudioContext() {
+  if (sharedAudioContext) return sharedAudioContext;
+  const AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) return null;
+  sharedAudioContext = new AudioCtor();
+  return sharedAudioContext;
+}
+
+function resumeSharedAudioContext() {
+  const ctx = sharedAudioContext;
+  if (ctx && ctx.state === 'suspended') {
+    ctx.resume().catch((err) => console.warn('Failed to resume shared audio context:', err));
+  }
+}
+
+// Stage 3 graph: RTCRtpReceiver audio track -> MediaStreamSource -> Bass shelf
+// -> Mid peak -> Treble shelf -> Gain -> MediaStreamDestination -> sink <audio>.
+// Deliberately NOT createMediaElementSource(remoteVideo): tapping the video
+// element directly caused Chrome to intermittently stop decoding the inbound
+// RTP audio track on real networks (flat 0 audioLevel, total silence). Sourcing
+// the graph from the raw MediaStreamTrack instead keeps RTP decoding fully
+// independent of remoteVideo's own playback/volume state.
+function ensureRemoteAudioGraph() {
+  if (remoteAudioGraph) return remoteAudioGraph;
+
+  const audioTrack = remoteVideo?.srcObject?.getAudioTracks?.()[0];
+  if (!audioTrack) return null;
+
+  const audioContext = getOrCreateAudioContext();
+  if (!audioContext) return null;
+
+  try {
+    const audioOnlyStream = new MediaStream([audioTrack]);
+    const mediaSource = audioContext.createMediaStreamSource(audioOnlyStream);
+
+    const bass = audioContext.createBiquadFilter();
+    bass.type = 'lowshelf';
+    bass.frequency.value = 250;
+    bass.gain.value = 0;
+
+    const mid = audioContext.createBiquadFilter();
+    mid.type = 'peaking';
+    mid.frequency.value = 1000;
+    mid.Q.value = 1;
+    mid.gain.value = 0;
+
+    const treble = audioContext.createBiquadFilter();
+    treble.type = 'highshelf';
+    treble.frequency.value = 4000;
+    treble.gain.value = 0;
+
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = 1;
+
+    const mediaStreamDestination = audioContext.createMediaStreamDestination();
+    const sinkEl = document.createElement('audio');
+    sinkEl.style.display = 'none';
+    sinkEl.autoplay = true;
+    sinkEl.srcObject = mediaStreamDestination.stream;
+    document.body.appendChild(sinkEl);
+
+    // getStats() inbound-rtp.audioLevel is unreliable once the track is no
+    // longer consumed via an HTMLMediaElement; tap our own analyser instead
+    // and feed it to the debug HUD for a live RX level meter.
+    const analyserNode = audioContext.createAnalyser();
+    analyserNode.fftSize = 256;
+
+    mediaSource.connect(bass);
+    mediaSource.connect(analyserNode);
+    bass.connect(mid);
+    mid.connect(treble);
+    treble.connect(gainNode);
+    gainNode.connect(mediaStreamDestination);
+
+    // remoteVideo still renders video normally; silence its own audio via
+    // volume (proven safe in stage 2) so only the processed sinkEl is audible.
+    remoteVideo.volume = 0;
+
+    remoteAudioGraph = { audioContext, mediaSource, bass, mid, treble, gainNode, mediaStreamDestination, sinkEl, analyserNode };
+    return remoteAudioGraph;
+  } catch (err) {
+    console.warn('Remote audio graph setup failed:', err);
+    return null;
+  }
+}
+
+function resumeRemoteAudioContext() {
+  const graph = remoteAudioGraph;
+  if (!graph) return;
+
+  if (graph.audioContext.state === 'suspended') {
+    graph.audioContext.resume().catch((err) => console.warn('Failed to resume remote audio context:', err));
+  }
+
+  const playPromise = graph.sinkEl.play();
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch(() => {});
+  }
+}
+
+function syncRemoteAudioEqUi() {
+  const bass = Number(speakerEqBass?.value ?? 0);
+  const mid = Number(speakerEqMid?.value ?? 0);
+  const treble = Number(speakerEqTreble?.value ?? 0);
+
+  if (speakerEqBassValue) speakerEqBassValue.textContent = formatEqValue(bass);
+  if (speakerEqMidValue) speakerEqMidValue.textContent = formatEqValue(mid);
+  if (speakerEqTrebleValue) speakerEqTrebleValue.textContent = formatEqValue(treble);
+
+  const graph = ensureRemoteAudioGraph();
+  if (!graph) return;
+
+  graph.bass.gain.value = bass;
+  graph.mid.gain.value = mid;
+  graph.treble.gain.value = treble;
+  resumeRemoteAudioContext();
+}
+
+function applyRemoteEqPreset(presetName) {
+  const presetMap = {
+    flat: { bass: 0, mid: 0, treble: 0 },
+    acoustic: { bass: -2, mid: 4, treble: -2 },
+    scooped: { bass: 4, mid: -4, treble: 4 },
+    bass: { bass: 6, mid: 0, treble: -2 },
+    treble: { bass: -2, mid: 0, treble: 6 }
+  };
+
+  const selected = presetMap[presetName] || presetMap.flat;
+  if (speakerEqBass) speakerEqBass.value = selected.bass;
+  if (speakerEqMid) speakerEqMid.value = selected.mid;
+  if (speakerEqTreble) speakerEqTreble.value = selected.treble;
+
+  syncRemoteAudioEqUi();
+
+  document.querySelectorAll('.speaker-preset-btn').forEach((button) => {
+    button.classList.toggle('active', button.dataset.preset === presetName);
+  });
+}
+
+function normalizeSpeakerVolume(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 1;
+  return clampRange(numericValue, 0, 2);
+}
+
+// Stage 3: mute drives the graph's gainNode when available, falling back to
+// remoteVideo's own muted/volume when no audio track/graph exists yet.
+function applySpeakerMuteState(isMuted) {
+  if (!speakerBtn) return;
+
+  speakerBtn.setAttribute('data-muted', isMuted ? 'true' : 'false');
+  speakerBtn.classList.toggle('btn-toggle-active', isMuted);
+  speakerBtn.classList.toggle('btn-strikethrough', isMuted);
+  speakerBtn.innerText = 'Spk';
+  speakerBtn.title = isMuted ? 'Unmute speaker' : 'Mute speaker';
+
+  const graph = ensureRemoteAudioGraph();
+  if (graph) {
+    const currentVolume = Number(speakerVolume?.value ?? rememberedSpeakerVolume);
+    graph.gainNode.gain.value = isMuted || currentVolume <= 0 ? 0 : currentVolume;
+    resumeRemoteAudioContext();
+  } else if (remoteVideo) {
+    remoteVideo.muted = isMuted;
+    remoteVideo.volume = isMuted ? 0 : 1;
+  }
+
+  if (isMuted && speakerVolume) {
+    speakerVolume.value = 0;
+    if (speakerVolumeValue) speakerVolumeValue.textContent = '0.00';
+  }
+}
+
+function getSpeakerUnmuteVolume() {
+  if (speakerMuteSource === 'slider') {
+    speakerMuteSource = null;
+    return 1;
+  }
+
+  const remembered = Number(rememberedSpeakerVolume);
+  return Number.isFinite(remembered) && remembered > 0 ? remembered : 1;
+}
+
+// Stage 3: volume drives the graph's gainNode when available.
+function syncRemoteSpeakerVolume() {
+  const clamped = normalizeSpeakerVolume(speakerVolume?.value ?? rememberedSpeakerVolume);
+
+  if (speakerVolume) {
+    speakerVolume.value = clamped;
+    speakerVolume.dataset.prevVolume = String(clamped);
+  }
+  if (speakerVolumeValue) {
+    speakerVolumeValue.textContent = Number(clamped).toFixed(2);
+  }
+
+  const graph = ensureRemoteAudioGraph();
+  if (clamped <= 0) {
+    rememberedSpeakerVolume = Number.isFinite(Number(speakerVolume?.dataset.prevVolume)) ? Number(speakerVolume.dataset.prevVolume) : rememberedSpeakerVolume || 1;
+    speakerMuteSource = 'slider';
+    applySpeakerMuteState(true);
+    if (graph) {
+      graph.gainNode.gain.value = 0;
+    }
+    return;
+  }
+
+  rememberedSpeakerVolume = clamped;
+  const shouldMute = speakerBtn?.getAttribute('data-muted') === 'true' && clamped > 0;
+  applySpeakerMuteState(false);
+
+  if (graph) {
+    graph.gainNode.gain.value = shouldMute ? 0 : clamped;
+    resumeRemoteAudioContext();
+  }
+}
+
 function tryPlayRemoteVideo() {
   const playPromise = remoteVideo.play();
   if (playPromise && typeof playPromise.catch === 'function') {
@@ -795,6 +1080,21 @@ function tryPlayRemoteVideo() {
       }
       console.warn('Remote video playback blocked:', err);
     });
+  }
+
+  if (remoteVideo && remoteVideo.srcObject) {
+    const graph = ensureRemoteAudioGraph();
+    resumeRemoteAudioContext();
+    syncRemoteSpeakerVolume();
+    syncRemoteAudioEqUi();
+    if (graph) {
+      webRtcDebugger.setRemoteAudioAnalyser(graph.analyserNode);
+    }
+    // A freshly created sink element always starts on the default output;
+    // reapply whatever device the user had already selected in the picker.
+    if (speakerOutput && speakerOutput.value) {
+      applySpeakerOutputSelection();
+    }
   }
 }
 
@@ -927,9 +1227,11 @@ function updateToggleButtonVisuals() {
 
   muteBtn.classList.toggle('btn-toggle-active', isMuted);
   camBtn.classList.toggle('btn-toggle-active', isCameraOff);
+  muteBtn.classList.toggle('btn-strikethrough', isMuted);
+  camBtn.classList.toggle('btn-strikethrough', isCameraOff);
 
-  muteBtn.innerText = isMuted ? 'Unmute' : 'Mute';
-  camBtn.innerText = isCameraOff ? 'Camera on' : 'Camera off';
+  muteBtn.innerText = 'Mic';
+  camBtn.innerText = 'Cam';
 
   muteBtn.title = isMuted ? 'Unmute (Space)' : 'Mute (Space)';
   camBtn.title = isCameraOff ? 'Turn camera on (C)' : 'Turn camera off (C)';
@@ -1231,27 +1533,111 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('scroll', scheduleViewportLayoutMetricsUpdate);
 }
 
+function getSpeakerOutputSupportState() {
+  const hasEnumerateDevices = Boolean(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices);
+  const hasSetSinkId = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+  return {
+    hasEnumerateDevices,
+    hasSetSinkId,
+    supported: hasEnumerateDevices && hasSetSinkId
+  };
+}
+
+function populateSpeakerOutputs() {
+  if (!speakerOutput) return;
+
+  speakerOutput.innerHTML = '';
+  const defaultOption = document.createElement('option');
+  defaultOption.value = '';
+  defaultOption.text = 'System Default';
+  defaultOption.title = 'System Default';
+  speakerOutput.appendChild(defaultOption);
+
+  const supportState = getSpeakerOutputSupportState();
+  if (!supportState.supported) {
+    speakerOutput.disabled = true;
+    speakerOutput.title = 'Speaker output switching is unavailable in this browser.';
+    return;
+  }
+
+  navigator.mediaDevices.enumerateDevices().then((devices) => {
+    // Chrome/Windows also expose synthetic 'default' and 'communications' aliases
+    // that duplicate a real physical device entry; we already provide our own
+    // "System Default" option, so drop those aliases to avoid confusing duplicates.
+    const outputDevices = devices.filter(device => device.kind === 'audiooutput'
+      && device.deviceId !== 'default'
+      && device.deviceId !== 'communications');
+
+    outputDevices.forEach((device) => {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.text = device.label || `Speaker ${speakerOutput.length}`;
+      option.title = option.text;
+      speakerOutput.appendChild(option);
+    });
+
+    const hasDevices = outputDevices.length > 0;
+    speakerOutput.disabled = !hasDevices;
+    speakerOutput.title = hasDevices
+      ? 'Choose the browser audio output device for the remote stream.'
+      : 'No speaker output devices were detected for this browser session.';
+  }).catch(() => {
+    speakerOutput.disabled = true;
+    speakerOutput.title = 'Speaker output devices could not be enumerated; using the system default.';
+  });
+}
+
+async function applySpeakerOutputSelection() {
+  if (!remoteVideo || !speakerOutput) return;
+
+  const supportState = getSpeakerOutputSupportState();
+  if (!supportState.supported) {
+    speakerOutput.disabled = true;
+    return;
+  }
+
+  // Once the graph exists, remoteVideo's own audio is silenced (volume 0), so
+  // the sink device must be applied to the graph's sink element instead.
+  // An empty value means "System Default", which setSinkId('') restores explicitly.
+  const graph = ensureRemoteAudioGraph();
+  const sinkTarget = graph?.sinkEl ?? remoteVideo;
+
+  try {
+    await sinkTarget.setSinkId(speakerOutput.value);
+    resumeRemoteAudioContext();
+  } catch (err) {
+    console.warn('Failed to apply remote audio output device:', err);
+    speakerOutput.value = '';
+    speakerOutput.title = 'Speaker output device request was rejected; using the system default.';
+  }
+}
+
 async function discoverDevices() {
   const devices = await navigator.mediaDevices.enumerateDevices();
 
   audioSource.innerHTML = '';
   videoSource.innerHTML = '';
 
-  devices.forEach(device => {
-    const option = document.createElement('option');
-    option.value = device.deviceId;
+  // Same 'default'/'communications' alias duplication as audiooutput applies
+  // to audioinput devices on Windows/Chrome; drop those aliases here too.
+  devices
+    .filter(device => device.deviceId !== 'default' && device.deviceId !== 'communications')
+    .forEach(device => {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
 
-    if (device.kind === 'audioinput') {
-      option.text = device.label || `Microphone ${audioSource.length + 1}`;
-      option.title = option.text;
-      audioSource.appendChild(option);
-    } else if (device.kind === 'videoinput') {
-      option.text = device.label || `Camera ${videoSource.length + 1}`;
-      option.title = option.text;
-      videoSource.appendChild(option);
-    }
-  });
+      if (device.kind === 'audioinput') {
+        option.text = device.label || `Microphone ${audioSource.length + 1}`;
+        option.title = option.text;
+        audioSource.appendChild(option);
+      } else if (device.kind === 'videoinput') {
+        option.text = device.label || `Camera ${videoSource.length + 1}`;
+        option.title = option.text;
+        videoSource.appendChild(option);
+      }
+    });
 
+  populateSpeakerOutputs();
   setDeviceControlsEnabled(true);
   syncSelectedDeviceTitles();
 }
@@ -1457,6 +1843,11 @@ async function beginJoinRoom(roomName, autoDetected = false) {
 }
 
 callBtn.addEventListener('click', async () => {
+  // Prime/resume the shared AudioContext on this guaranteed user gesture so
+  // it's already running (not autoplay-suspended) once remote audio arrives.
+  getOrCreateAudioContext();
+  resumeSharedAudioContext();
+
   if (activeRoomName) {
     await resetCallSession('Disconnected. Enter a key above to call again.');
     return;
@@ -1609,6 +2000,85 @@ camBtn.addEventListener('click', () => {
   }
 });
 
+if (speakerBtn) {
+  speakerBtn.addEventListener('click', () => {
+    const currentlyMuted = speakerBtn.getAttribute('data-muted') === 'true';
+    const nextMuted = !currentlyMuted;
+
+    if (nextMuted) {
+      const current = Number(speakerVolume?.value ?? rememberedSpeakerVolume);
+      rememberedSpeakerVolume = Number.isFinite(current) && current > 0 ? current : rememberedSpeakerVolume || 1;
+      speakerMuteSource = null;
+      if (speakerVolume) {
+        speakerVolume.value = 0;
+      }
+      applySpeakerMuteState(true);
+      return;
+    }
+
+    const unmuteVolume = getSpeakerUnmuteVolume();
+    if (speakerVolume) {
+      speakerVolume.value = unmuteVolume;
+      if (speakerVolumeValue) speakerVolumeValue.textContent = Number(unmuteVolume).toFixed(2);
+      speakerVolume.dataset.prevVolume = String(unmuteVolume);
+    }
+
+    applySpeakerMuteState(false);
+    syncRemoteSpeakerVolume();
+  });
+}
+
+if (speakerOutput) {
+  speakerOutput.addEventListener('change', applySpeakerOutputSelection);
+}
+
+if (speakerVolume) {
+  speakerVolume.addEventListener('input', () => {
+    const nextVolume = Number(speakerVolume.value);
+    const shouldMute = nextVolume <= 0;
+
+    if (shouldMute) {
+      speakerMuteSource = 'slider';
+      rememberedSpeakerVolume = Number.isFinite(Number(speakerVolume.dataset.prevVolume)) ? Number(speakerVolume.dataset.prevVolume) : rememberedSpeakerVolume || 1;
+      applySpeakerMuteState(true);
+      return;
+    }
+
+    speakerMuteSource = null;
+    rememberedSpeakerVolume = nextVolume;
+    if (speakerVolume) {
+      speakerVolume.dataset.prevVolume = String(nextVolume);
+    }
+
+    if (speakerBtn?.getAttribute('data-muted') === 'true') {
+      applySpeakerMuteState(false);
+    }
+
+    syncRemoteSpeakerVolume();
+  });
+}
+
+if (speakerEqBass) {
+  speakerEqBass.addEventListener('input', syncRemoteAudioEqUi);
+}
+
+if (speakerEqMid) {
+  speakerEqMid.addEventListener('input', syncRemoteAudioEqUi);
+}
+
+if (speakerEqTreble) {
+  speakerEqTreble.addEventListener('input', syncRemoteAudioEqUi);
+}
+
+document.querySelectorAll('.speaker-preset-btn').forEach((button) => {
+  button.addEventListener('click', () => {
+    applyRemoteEqPreset(button.dataset.preset || 'flat');
+  });
+});
+
+applyRemoteEqPreset('flat');
+syncRemoteSpeakerVolume();
+
 moveBtn.addEventListener('click', () => {
   pipViewState.positionIndex = (pipViewState.positionIndex + 1) % PIP_POSITIONS.length;
   applyPipPosition();
@@ -1630,7 +2100,7 @@ const audioSettingsControls = [
   audioSampleRate,
   audioBitDepth,
   audioChannels,
-  ...Array.from(document.querySelectorAll('#deviceSelector .device-section:first-of-type .device-toggle input')).slice(0, 3),
+  ...Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-section .device-toggle input')).slice(0, 3),
   audioBitrateCeiling
 ];
 
