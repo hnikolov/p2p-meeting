@@ -65,7 +65,32 @@ This is the recommended pattern for a browser-based WebRTC signaling app: anonym
 
 ---
 
-## 💻 Local Testing & Corporate Firewall Bypass
+## ⚠️ Known issue: peer-to-peer call failure behind a company firewall
+
+This app relies on direct WebRTC peer-to-peer media exchange. In some real-world network conditions, especially when one participant is on a corporate network or behind a strict firewall/VPN/NAT, signaling succeeds but the media path still fails.
+
+Typical symptoms observed in practice:
+
+- both peers complete the room setup and SDP exchange
+- the app shows status messages such as “Answer transmitted. Syncing streams...” or “Connected! Peer media stream verified.”
+- no actual video is transmitted
+- after the internal WebRTC timeout, the app resets with: “Connection failed. You can try the same room key again.”
+
+This is a WebRTC ICE/NAT traversal issue rather than a Firebase or room-creation bug. Firebase is only used for signaling; it does not carry the actual audio/video traffic. If the browser cannot find a valid ICE route between the two devices, the call appears to connect at the signaling layer but cannot send media end-to-end.
+
+This issue is especially common when:
+
+- one side is on a company network or VPN
+- one side is behind a restrictive corporate firewall or symmetric NAT
+- the other side is on a mobile carrier network or another NAT domain
+
+In such cases, direct browser-to-browser UDP media is often blocked or unusable, even though the signaling data is exchanged successfully. That is why the app can look “connected” before the actual media session fails.
+
+This is a known limitation of pure peer-to-peer WebRTC in restrictive enterprise environments. The app remains a peer-to-peer design, but it is not guaranteed to work reliably when direct media paths are blocked by network policy.
+
+---
+
+## 💻 Local Testing
 
 Due to modern browser security restrictions, JavaScript Modules (`type="module"`) cannot run via the local file system protocol (`file:///`). You must serve the application through a local web server layer.
 
@@ -99,14 +124,6 @@ Install flow:
 2. In Chrome/Edge Android, use **Install app** / **Add to Home screen**.
 3. On iOS Safari, use **Share** -> **Add to Home Screen**.
 4. Launch from the home-screen icon to run without browser controls.
-
-### ⚠️ Important Implementation Detail: Parameter Tuning
-Audio and network settings are handled through two distinct mechanisms because browser media engines behave differently depending on what is being changed.
-
-- Audio hardware constraints such as sample rate, channel count, bit depth, and capture filters must be applied through a controlled teardown-and-rebuild cycle: the active audio track is stopped and removed, a 50ms delay is allowed for the OS driver lock to clear, then a fresh audio stream is created with `getUserMedia()`, and the new track is swapped into the active sender via `replaceTrack()`. This avoids the browser/OS lockups that occur when constraints are mutated directly on a live track.
-- Network-side adjustments such as max FPS, video bitrate, audio bitrate, and degradation preference are updated live on the active RTCRtpSender using `setParameters()` without renegotiating the peer connection. This preserves the call while changing the transmission profile on the fly.
-
-This split is important because direct updates to live capture constraints are not always reliable across Chromium and OS audio drivers, while dynamic sender parameter updates are the correct path for transmission tuning.
 
 ---
 
