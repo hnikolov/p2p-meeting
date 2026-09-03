@@ -90,6 +90,23 @@ This is a known limitation of pure peer-to-peer WebRTC in restrictive enterprise
 
 ---
 
+## ⚠️ Known issue: Android Chrome cannot switch browser audio output device
+
+On desktop browsers, the app can enumerate `audiooutput` devices and allow the user to select a different speaker or headset through the built-in output selector. On Android Chrome, this is not generally supported by the browser Web API.
+
+Symptoms observed in practice:
+
+- the selector shows `System Default` as selected
+- the browser reports no selectable output devices
+- the browser disables the speaker-output dropdown on Android Chrome
+- the device effectively falls back to the OS-controlled default output (earpiece or loudspeaker), rather than letting the web app choose a specific output route
+
+This is not a bug in the app's selector logic. The root cause is browser capability: on Android Chrome, `HTMLMediaElement.setSinkId()` is not implemented, so the Web app cannot programmatically force the output to a different device like it can on desktop Chrome/Edge. In practice, the browser decides whether audio goes through the earpiece or loudspeaker, and the app must respect that limitation.
+
+If the application requires explicit earpiece vs loudspeaker switching on Android, that needs to be implemented in a native Android wrapper or WebView integration, not in standard browser JavaScript alone.
+
+---
+
 ## 💻 Local Testing
 
 Due to modern browser security restrictions, JavaScript Modules (`type="module"`) cannot run via the local file system protocol (`file:///`). You must serve the application through a local web server layer.
