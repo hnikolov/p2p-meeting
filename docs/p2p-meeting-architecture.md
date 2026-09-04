@@ -110,6 +110,23 @@ The app also manages local device selection and remote audio output tuning:
 
 This part is independent of the peer-to-peer signaling architecture, but it is part of the end-user experience.
 
+### 3.5 Firebase configuration and security model
+
+Firebase in this project is not the media plane. It is the signaling plane.
+
+The app authenticates anonymously with Firebase and then writes only the metadata required to establish a call:
+
+- room offer data
+- room answer data
+- ICE candidates for each side
+- participant presence markers used to assign roles
+
+This means the database is intentionally small and ephemeral. The app does not store audio or video in Firebase; it only stores handshake and coordination data needed to bring the two browsers together.
+
+The recommended security model is to restrict access to the room tree and require authenticated access only. In practice, that means the browser client authenticates anonymously, and the Firebase Realtime Database rules allow reads/writes only within the `rooms/{roomId}` namespace rather than opening the entire database to public traffic.
+
+This preserves the simple browser-to-browser model while avoiding an insecure global open database.
+
 ---
 
 ## 4. Actual runtime topology
@@ -123,21 +140,22 @@ Browser A                                  Firebase Realtime DB                 
    |------------------------------------------------>|                                               |
    |                                                 |                                               |
    | 2. createOffer() / setLocalDescription()        |                                               |
-   |-----------------------------> offer ------------>|                                               |
+   |-----------------------------> offer ----------->|                                               |
    |                                                 |                                               |
-   |                                                 | 3. sees offer / creates answer               |
+   |                                                 | 3. sees offer / creates answer                |
    |                                                 |<---- answer ----------------------------------|
    | 4. ICE candidates published                     |                                               |
-   |-----------------------------> candidates ----->|                                               |
+   |-----------------------------> candidates ------>|                                               |
    |                                                 |                                               |
-   |                                                 | 5. ICE candidates published                 |
-   |                                                 |<---- candidates ----------------------------|
-   | 6. ICE connectivity checks                     |                                               |
-   |<------------------------------------------------>|                                               |
-   |                                                 |                                               |
-   | 7. Direct media flow (audio/video) <= direct peer-to-peer bridge => 7. Direct media flow
-   |                                                                             |
-   +-------------------- STUN / TURN ICE network discovery ----------------------+
+   |                                                 | 5. ICE candidates published                   |
+   |                                                 |<---- candidates ------------------------------|
+   | 6. ICE connectivity checks                      |                                               |
+   |<----------------------------------------------->|                                               |
+   |                                                                                                 |
+   |                                                                                                 |
+   | 7. Direct media flow (audio/video)   <=   direct peer-to-peer bridge   =>  7. Direct media flow |
+   |                                                                                                 |
+   +------------------------------ STUN / TURN ICE network discovery --------------------------------+
 ```
 
 The key point is that the media path is not routed through Firebase. Firebase is only the rendezvous and signaling channel.

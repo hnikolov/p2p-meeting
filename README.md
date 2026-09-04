@@ -6,9 +6,10 @@ Available [here](https://hnikolov.github.io/p2p-meeting)
 
 ## 🚀 Key Features
 
-*   **100% Peer-to-Peer:** Audio and video streams bypass intermediate servers and flow directly between participants.
+*   **100% Peer-to-Peer:** Audio and video streams travel straight between browsers whenever the network allows.
+*   **Smaller Trust Boundary:** Only room metadata and connection signals pass through Firebase; the live media stream stays closer to the participants.
 *   **Shared Secret Rooms:** Enter an agreed-upon passphrase (e.g., `hristo-room`) to connect securely without sharing complex URL paths.
-*   **Audio-First Bandwidth Optimization:** Automatically hard-caps video bandwidth (~400kbps) and sets audio streams to high network priority (`high`). If your connection drops, video quality degrades gracefully so audio never stutters.
+*   **Audio-First Bandwidth Optimization:** Automatically hard-caps video bandwidth (~500kbps) and sets audio streams to high network priority (`high`). If your connection drops, video quality degrades gracefully so audio never stutters.
 *   **Hot-Swappable Hardware Selectors:** Switch between multiple microphones or webcams mid-call instantly without dropping the connection.
 *   **Automatic Cleanup:** Each participant clears their own signaling records automatically via browser lifecycle triggers (`beforeunload`) when they leave the page.
 
