@@ -190,7 +190,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.0';
+const APP_VERSION = 'v0.5.1';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -339,7 +339,7 @@ startVideoTrackTelemetry();
 
 // STREAM SETTINGS START
 function getAudioFilterInputState() {
-  const filterInputs = Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-section .device-toggle input')).slice(0, 3);
+  const filterInputs = Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-toggle input')).slice(0, 3);
 
   return {
     echoCancellation: filterInputs[0] ? filterInputs[0].checked : true,
@@ -798,14 +798,14 @@ function restoreDeviceSettings() {
     setSelectValueIfPresent(audioChannels, audioSettings.channels);
     setSelectValueIfPresent(audioBitrateCeiling, audioSettings.bitrateCeiling);
 
-    const filterInputs = Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-section .device-toggle input')).slice(0, 3);
-    if (typeof filterState.echoCancellation === 'boolean') {
+    const filterInputs = Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-toggle input')).slice(0, 3);
+    if (typeof filterState.echoCancellation === 'boolean' && filterInputs[0]) {
       filterInputs[0].checked = filterState.echoCancellation;
     }
-    if (typeof filterState.noiseSuppression === 'boolean') {
+    if (typeof filterState.noiseSuppression === 'boolean' && filterInputs[1]) {
       filterInputs[1].checked = filterState.noiseSuppression;
     }
-    if (typeof filterState.autoGainControl === 'boolean') {
+    if (typeof filterState.autoGainControl === 'boolean' && filterInputs[2]) {
       filterInputs[2].checked = filterState.autoGainControl;
     }
 
@@ -840,6 +840,51 @@ let sharedAudioContext = null;
 let rememberedSpeakerVolume = 1;
 let speakerMuteSource = null;
 
+function destroyRemoteAudioGraph() {
+  if (!remoteAudioGraph) return;
+
+  try {
+    const { mediaSource, gainNode, mediaStreamDestination, sinkEl } = remoteAudioGraph;
+
+    if (mediaSource) {
+      try {
+        mediaSource.disconnect();
+      } catch {
+        // Ignore disconnect errors from an already-closed node.
+      }
+    }
+
+    if (gainNode) {
+      try {
+        gainNode.disconnect();
+      } catch {
+        // Ignore disconnect errors from an already-closed node.
+      }
+    }
+
+    if (mediaStreamDestination) {
+      try {
+        mediaStreamDestination.disconnect();
+      } catch {
+        // Ignore disconnect errors from an already-closed node.
+      }
+    }
+
+    if (sinkEl && sinkEl.parentNode) {
+      sinkEl.pause();
+      sinkEl.srcObject = null;
+      sinkEl.parentNode.removeChild(sinkEl);
+    }
+  } catch (err) {
+    console.warn('Failed to destroy the remote audio graph:', err);
+  } finally {
+    remoteAudioGraph = null;
+    if (webRtcDebugger && typeof webRtcDebugger.setRemoteAudioAnalyser === 'function') {
+      webRtcDebugger.setRemoteAudioAnalyser(null);
+    }
+  }
+}
+
 function clampRange(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -857,7 +902,14 @@ function formatEqValue(value) {
 // Created/resumed from the Call button click (a real user gesture) so it's
 // already running by the time the remote audio track arrives.
 function getOrCreateAudioContext() {
-  if (sharedAudioContext) return sharedAudioContext;
+  if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
+    return sharedAudioContext;
+  }
+
+  if (sharedAudioContext && sharedAudioContext.state === 'closed') {
+    sharedAudioContext = null;
+  }
+
   const AudioCtor = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtor) return null;
   sharedAudioContext = new AudioCtor();
@@ -879,10 +931,21 @@ function resumeSharedAudioContext() {
 // the graph from the raw MediaStreamTrack instead keeps RTP decoding fully
 // independent of remoteVideo's own playback/volume state.
 function ensureRemoteAudioGraph() {
-  if (remoteAudioGraph) return remoteAudioGraph;
-
   const audioTrack = remoteVideo?.srcObject?.getAudioTracks?.()[0];
-  if (!audioTrack) return null;
+  if (!audioTrack) {
+    if (remoteAudioGraph) {
+      destroyRemoteAudioGraph();
+    }
+    return null;
+  }
+
+  if (remoteAudioGraph && remoteAudioGraph.trackId === audioTrack.id) {
+    return remoteAudioGraph;
+  }
+
+  if (remoteAudioGraph) {
+    destroyRemoteAudioGraph();
+  }
 
   const audioContext = getOrCreateAudioContext();
   if (!audioContext) return null;
@@ -934,7 +997,10 @@ function ensureRemoteAudioGraph() {
     // volume (proven safe in stage 2) so only the processed sinkEl is audible.
     remoteVideo.volume = 0;
 
-    remoteAudioGraph = { audioContext, mediaSource, bass, mid, treble, gainNode, mediaStreamDestination, sinkEl, analyserNode };
+    remoteAudioGraph = { audioContext, mediaSource, bass, mid, treble, gainNode, mediaStreamDestination, sinkEl, analyserNode, trackId: audioTrack.id };
+    if (webRtcDebugger && typeof webRtcDebugger.setRemoteAudioAnalyser === 'function') {
+      webRtcDebugger.setRemoteAudioAnalyser(analyserNode);
+    }
     return remoteAudioGraph;
   } catch (err) {
     console.warn('Remote audio graph setup failed:', err);
@@ -1445,6 +1511,7 @@ function closePeerConnection() {
   peerConnection = null;
   remoteStream = null;
   remoteIceQueue = [];
+  destroyRemoteAudioGraph();
 }
 
 function getRoomCleanupRefs(roomName, role) {
@@ -2100,7 +2167,7 @@ const audioSettingsControls = [
   audioSampleRate,
   audioBitDepth,
   audioChannels,
-  ...Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-section .device-toggle input')).slice(0, 3),
+  ...Array.from(document.querySelectorAll('#microphoneDeviceSelector .device-toggle input')).slice(0, 3),
   audioBitrateCeiling
 ];
 

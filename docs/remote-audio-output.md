@@ -147,6 +147,34 @@ the `suspended` state under browser autoplay policies if the user never
 happens to interact with those controls — resulting in total silence with no
 obvious cause.
 
+## Reconnect safety and stale receive-graph handling
+
+A reconnect bug surfaced that was not a basic WebRTC failure: the app would
+sometimes keep a stale receive-side graph from a previous session and reuse it
+on the next call. That left the hidden sink element and analyser tied to an old
+`MediaStreamTrack` even though the peer connection had been reset and a new RTP
+track was already arriving.
+
+This produces the classic symptom pattern:
+
+- outbound audio still shows non-zero network activity
+- inbound receive level collapses toward `0.0000`
+- no sound reaches the selected speaker output
+- a full hard reload fixes it because the page is rebuilt and the audio graph is
+  recreated from a clean state
+
+The safe lifecycle is:
+
+1. detect whether the active remote track changed
+2. destroy the previous receive graph before building a new one
+3. clear the analyser attachment and sink element
+4. rebuild the graph from the current remote track
+5. resume the `AudioContext` and reapply the selected output device
+
+This is no longer treated as a one-time setup; it must be treated as
+stateful session management across reconnects, not just a single call creation
+path.
+
 ## Why not `createMediaElementSource(remoteVideo)`
 
 The first working implementation tapped `remoteVideo` directly via

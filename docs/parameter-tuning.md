@@ -132,6 +132,25 @@ rather than hard-fixing a single exact value when the device or driver may only 
 
 During teardown and replacement, the UI may still be polling or re-reading the device state. Without a guard, diagnostic checks or checkbox state recovery can race against the swap and restore stale values back onto the UI. The guard keeps the state machine coherent while the track is being rebuilt.
 
+### Reconnect and stale receive-graph safety
+
+The same principle applies on the receive side, not just the local microphone path. A stale receive-side Web Audio graph can survive a reconnect and continue to point at an old audio track while the new session is already transmitting fresh RTP. In practice this showed up as:
+
+- TX audio still present on the network
+- RX audio meter collapsing to `0.0000`
+- no audible output from the remote speaker path
+- a page reload restoring audio because the graph and context are recreated from scratch
+
+The fix must therefore include a proper teardown of the receive graph when the remote track or session changes:
+
+- disconnect the old media source and gain chain
+- remove the hidden sink element
+- clear the analyser reference
+- rebuild the graph from the new `MediaStreamTrack`
+- resume the `AudioContext` and reapply the selected output device
+
+This is not optional. The receive-side graph is a session-scoped object, not a permanent singleton.
+
 ## II. Network transmission layer: update sender parameters in place
 
 This path is used when the change affects how media is transmitted over the network, without altering the physical microphone/webcam source.
