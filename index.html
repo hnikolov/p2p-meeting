@@ -653,11 +653,46 @@ button {
     position: static;
     transform: none;
     width: 100%;
+    max-width: calc(100vw - 20px);
     order: 3;
     box-shadow: none;
     padding: 12px 10px;
     flex-direction: column;
     gap: 8px;
+  }
+
+  #speakerDeviceSelector {
+    max-width: calc(100vw - 18px);
+  }
+
+  #speakerDeviceSelector .speaker-eq-row {
+    gap: 8px;
+    min-width: 0;
+  }
+
+  #speakerDeviceSelector .speaker-preset-list {
+    width: 82px;
+    min-width: 82px;
+  }
+
+  #speakerDeviceSelector .speaker-preset-btn {
+    font-size: 12px;
+    padding-right: 2px;
+  }
+
+  #speakerDeviceSelector .speaker-slider-row {
+    gap: 4px;
+    min-width: 0;
+    justify-content: space-between;
+  }
+
+  #speakerDeviceSelector .speaker-slider-col {
+    width: 30px;
+    min-width: 30px;
+  }
+
+  #speakerDeviceSelector .speaker-eq-slider {
+    --speaker-track-width: 8px;
   }
   
   /* Ensures the toggle engine can still force visibility when active */
