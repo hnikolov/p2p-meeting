@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#202124">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -622,6 +622,30 @@ button {
   }
   .bottom-card-center {
     order: 2;
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: nowrap;
+  }
+
+  .toggle-pair {
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 0;
+    display: inline-flex;
+  }
+
+  .toggle-pair + .toggle-pair {
+    margin-left: 0 !important;
+  }
+
+  .bottom-card-left {
+    display: grid !important;
+    grid-template-columns: 88px minmax(0, 1fr) minmax(72px, 110px);
+    align-items: center;
+    width: 100%;
+    gap: 8px;
   }
   
   /* No 'display: flex;' so the card stays hidden until [^] is clicked */
@@ -688,23 +712,30 @@ button {
 
   /* REMOVE THE 100% WIDTH AND FORCE AUTOMATIC SHRINKING */
   #roomHeaderCard #roomKey {
-    width: clamp(90px, 42vw, 180px) !important;
-    min-width: 90px !important;
+    width: 100% !important;
+    min-width: 0 !important;
     flex-shrink: 1 !important;
   }
 
+  .btn-call {
+    width: min(30vw, 110px);
+    min-width: 72px;
+  }
+
   .btn-control-compact {
-    width: clamp(50px, 14vw, 58px);
-    min-width: 50px;
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
     padding: 8px 6px;
     font-size: 12px;
     letter-spacing: 0.12px;
   }
 
   .btn-settings-toggle {
-    width: clamp(28px, 7.5vw, 32px);
-    min-width: clamp(28px, 7.5vw, 32px);
-    height: clamp(28px, 7.5vw, 32px);
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
     font-size: 15px;
     padding-bottom: 2px;
     flex-shrink: 0;
