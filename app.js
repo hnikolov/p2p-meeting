@@ -109,6 +109,34 @@ let remotePresenceSeen = false;
 let remoteIceQueue = [];
 let signalingUnsubscribers = [];
 let joinTimeoutId = null;
+let roomAttemptState = new Map();
+
+function rememberRoomAttempt(roomName, sessionId = null, role = null) {
+  if (!roomName) return;
+
+  const existing = roomAttemptState.get(roomName) || {};
+  roomAttemptState.set(roomName, {
+    ...existing,
+    sessionId: sessionId ?? existing.sessionId ?? null,
+    role: role ?? existing.role ?? null,
+    updatedAt: Date.now()
+  });
+}
+
+function clearRoomAttempt(roomName) {
+  if (!roomName) return;
+  roomAttemptState.delete(roomName);
+}
+
+function pruneRoomAttempts() {
+  const now = Date.now();
+
+  for (const [roomName, attempt] of [...roomAttemptState.entries()]) {
+    if (!attempt || !attempt.updatedAt || now - attempt.updatedAt > STALE_ROOM_TTL_MS) {
+      roomAttemptState.delete(roomName);
+    }
+  }
+}
 
 function getRoomCleanupPaths(roomName, role) {
   const roomBasePath = `rooms/${roomName}`;
@@ -190,7 +218,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.1';
+const APP_VERSION = 'v0.5.2';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1396,6 +1424,8 @@ async function claimRoleSlot(roomName, role, sessionId) {
 async function cleanupStaleRoomState(roomName) {
   if (!roomName) return;
 
+  pruneRoomAttempts();
+
   const roomRef = ref(db, `rooms/${roomName}`);
   const roomSnapshot = await get(roomRef);
   if (!roomSnapshot.exists()) return;
@@ -1440,10 +1470,12 @@ async function cleanupStaleRoomState(roomName) {
   if (stalePaths.length === 0) return;
 
   await Promise.allSettled(stalePaths.map(pathRef => remove(pathRef)));
+  clearRoomAttempt(roomName);
   statusText.innerText = 'Recovered stale room state.';
 }
 
 async function evaluateRoomAction(roomName) {
+  pruneRoomAttempts();
   await cleanupStaleRoomState(roomName);
 
   const roomSnapshot = await get(ref(db, `rooms/${roomName}`));
@@ -1521,12 +1553,26 @@ function getRoomCleanupRefs(roomName, role) {
   return [ref(db, offer), ref(db, candidates), ref(db, participant)];
 }
 
+function getFullRoomCleanupRefs(roomName) {
+  if (!roomName) return [];
+
+  return [
+    ref(db, `rooms/${roomName}/offer`),
+    ref(db, `rooms/${roomName}/answer`),
+    ref(db, `rooms/${roomName}/callerCandidates`),
+    ref(db, `rooms/${roomName}/calleeCandidates`),
+    ref(db, `rooms/${roomName}/participants/caller`),
+    ref(db, `rooms/${roomName}/participants/callee`)
+  ];
+}
+
 async function cleanupRoomArtifacts() {
-  if (!activeRoomName || !localParticipantRole) return;
+  if (!activeRoomName) return;
 
   await Promise.allSettled(
-    getRoomCleanupRefs(activeRoomName, localParticipantRole).map(pathRef => remove(pathRef))
+    getFullRoomCleanupRefs(activeRoomName).map(pathRef => remove(pathRef))
   );
+  clearRoomAttempt(activeRoomName);
 }
 
 async function resetCallSession(statusMessage) {
@@ -1535,7 +1581,11 @@ async function resetCallSession(statusMessage) {
   unsubscribeRoomListeners();
   closePeerConnection();
   remoteVideo.srcObject = null;
+  const roomBeingReset = activeRoomName;
   await cleanupRoomArtifacts();
+  if (roomBeingReset) {
+    clearRoomAttempt(roomBeingReset);
+  }
   activeRoomName = null;
   localParticipantRole = null;
   activeSessionId = null;
@@ -1837,6 +1887,7 @@ async function beginStartRoom(roomName) {
   activeRoomName = roomName;
   localParticipantRole = 'caller';
   activeSessionId = createSessionId();
+  rememberRoomAttempt(roomName, activeSessionId, localParticipantRole);
   remotePresenceSeen = false;
   syncCallButtonMode();
   statusText.innerText = `Initializing room "${roomName}"...`;
@@ -1886,6 +1937,7 @@ async function beginJoinRoom(roomName, autoDetected = false) {
   activeRoomName = roomName;
   localParticipantRole = 'callee';
   activeSessionId = null;
+  rememberRoomAttempt(roomName, null, localParticipantRole);
   remotePresenceSeen = false;
   syncCallButtonMode();
   statusText.innerText = `Connecting to room "${roomName}"...`;
@@ -1954,6 +2006,11 @@ function listenToRoom(roomName) {
 
     try {
       const packetSessionId = data.sessionId || null;
+      const attempt = roomAttemptState.get(roomName) || null;
+
+      if (packetSessionId && attempt && attempt.sessionId && packetSessionId !== attempt.sessionId) {
+        return;
+      }
 
       if (localParticipantRole === 'caller') {
         if (!packetSessionId || packetSessionId !== activeSessionId) {
@@ -1966,6 +2023,7 @@ function listenToRoom(roomName) {
 
         if (!activeSessionId) {
           activeSessionId = packetSessionId;
+          rememberRoomAttempt(roomName, packetSessionId, localParticipantRole);
         } else if (packetSessionId !== activeSessionId) {
           if (data.sdp.type !== 'offer') {
             return;
@@ -1974,6 +2032,7 @@ function listenToRoom(roomName) {
           statusText.innerText = 'Remote peer restarted. Re-establishing call...';
           createPeerConnection(roomName);
           activeSessionId = packetSessionId;
+          rememberRoomAttempt(roomName, packetSessionId, localParticipantRole);
         }
       }
 
