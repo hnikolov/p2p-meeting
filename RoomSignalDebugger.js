@@ -18,10 +18,10 @@ class RoomSignalDebugger {
     this.hudElement.id = 'room-signal-hud';
     this.hudElement.style.cssText = `
       position: fixed;
-      left: 16px;
-      top: 16px;
-      width: 300px;
-      max-height: 92vh;
+      left: 15px;
+      top: 15px;
+      width: 280px;
+      max-height: 82vh;
       overflow-y: auto;
       background: rgba(10, 16, 24, 0.97);
       color: #eaf2ff;
