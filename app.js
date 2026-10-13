@@ -109,6 +109,7 @@ let remotePresenceSeen = false;
 let remoteIceQueue = [];
 let signalingUnsubscribers = [];
 let joinTimeoutId = null;
+let participantLeaseTimer = null;
 let roomAttemptState = new Map();
 
 function rememberRoomAttempt(roomName, sessionId = null, role = null) {
@@ -233,7 +234,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.6';
+const APP_VERSION = 'v0.5.7';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1403,6 +1404,91 @@ function createSessionId() {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const PARTICIPANT_LEASE_TTL_MS = 30000;
+const PARTICIPANT_LEASE_REFRESH_MS = 15000;
+
+function buildParticipantLease(sessionId, role) {
+  const now = Date.now();
+  return {
+    sessionId,
+    role,
+    updatedAt: now,
+    leaseUntil: now + PARTICIPANT_LEASE_TTL_MS
+  };
+}
+
+function isLeaseExpired(record, now = Date.now()) {
+  if (!record) return true;
+
+  if (typeof record.leaseUntil === 'number') {
+    return record.leaseUntil <= now;
+  }
+
+  const updatedAt = Number(record.updatedAt || now);
+  return now - updatedAt > STALE_ROOM_TTL_MS;
+}
+
+function hasActiveLease(record, now = Date.now()) {
+  if (!record || !record.sessionId) return false;
+  if (typeof record.leaseUntil === 'number') {
+    return record.leaseUntil > now;
+  }
+  return !isLeaseExpired(record, now);
+}
+
+function stopParticipantLeaseLoop() {
+  if (participantLeaseTimer) {
+    clearInterval(participantLeaseTimer);
+    participantLeaseTimer = null;
+  }
+}
+
+async function refreshActiveRoomSignalLease(roomName) {
+  if (!roomName || !activeSessionId || !localParticipantRole) {
+    return;
+  }
+
+  const signalPath = localParticipantRole === 'caller'
+    ? `rooms/${roomName}/offer`
+    : `rooms/${roomName}/answer`;
+
+  const signalRef = ref(db, signalPath);
+  const snapshot = await get(signalRef).catch(() => null);
+  if (!snapshot || !snapshot.exists()) {
+    return;
+  }
+
+  const currentValue = snapshot.val() || {};
+  if (!currentValue || !currentValue.sessionId || currentValue.sessionId !== activeSessionId) {
+    return;
+  }
+
+  const refreshedValue = {
+    ...currentValue,
+    sessionId: activeSessionId,
+    updatedAt: Date.now(),
+    leaseUntil: Date.now() + STALE_ROOM_TTL_MS
+  };
+
+  await set(signalRef, refreshedValue);
+}
+
+function startParticipantLeaseLoop(roomName) {
+  if (!roomName || !localParticipantRole || !activeSessionId) return;
+
+  stopParticipantLeaseLoop();
+  participantLeaseTimer = setInterval(async () => {
+    if (!activeRoomName || activeRoomName !== roomName || !localParticipantRole || !activeSessionId) {
+      stopParticipantLeaseLoop();
+      return;
+    }
+
+    const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
+    await set(ownPresenceRef, buildParticipantLease(activeSessionId, localParticipantRole));
+    await refreshActiveRoomSignalLease(roomName);
+  }, PARTICIPANT_LEASE_REFRESH_MS);
+}
+
 function getRemoteParticipantRole() {
   if (localParticipantRole === 'caller') return 'callee';
   if (localParticipantRole === 'callee') return 'caller';
@@ -1413,21 +1499,24 @@ async function publishOwnPresence(roomName) {
   if (!roomName || !localParticipantRole || !activeSessionId) return;
 
   const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
-  await set(ownPresenceRef, {
-    sessionId: activeSessionId,
-    updatedAt: Date.now()
-  });
+  await set(ownPresenceRef, buildParticipantLease(activeSessionId, localParticipantRole));
+  await refreshActiveRoomSignalLease(roomName);
   await onDisconnect(ownPresenceRef).remove();
+  startParticipantLeaseLoop(roomName);
 }
 
 async function claimRoleSlot(roomName, role, sessionId) {
   const slotRef = ref(db, `rooms/${roomName}/participants/${role}`);
   const claimResult = await runTransaction(slotRef, currentValue => {
-    if (!currentValue || !currentValue.sessionId || currentValue.sessionId === sessionId) {
-      return {
-        sessionId,
-        updatedAt: Date.now()
-      };
+    const now = Date.now();
+    const shouldReplace = !currentValue || !currentValue.sessionId || currentValue.sessionId === sessionId || (
+      typeof currentValue.leaseUntil === 'number'
+        ? currentValue.leaseUntil <= now
+        : now - (Number(currentValue.updatedAt) || now) > STALE_ROOM_TTL_MS
+    );
+
+    if (shouldReplace) {
+      return buildParticipantLease(sessionId, role);
     }
 
     return;
@@ -1451,33 +1540,33 @@ async function cleanupStaleRoomState(roomName) {
   const now = Date.now();
 
   Object.entries(participants).forEach(([role, participant]) => {
-    if (!participant || !participant.sessionId || !participant.updatedAt) return;
+    if (!participant || !participant.sessionId) return;
     if (activeSessionId && participant.sessionId === activeSessionId) return;
-    if (now - participant.updatedAt > STALE_ROOM_TTL_MS) {
+    if (isLeaseExpired(participant, now)) {
       stalePaths.push(ref(db, `rooms/${roomName}/participants/${role}`));
     }
   });
 
   const offerData = roomData.offer || null;
-  if (offerData && offerData.sessionId && (!activeSessionId || offerData.sessionId !== activeSessionId) && offerData.updatedAt && now - offerData.updatedAt > STALE_ROOM_TTL_MS) {
+  if (offerData && offerData.sessionId && (!activeSessionId || offerData.sessionId !== activeSessionId) && isLeaseExpired(offerData, now)) {
     stalePaths.push(ref(db, `rooms/${roomName}/offer`));
   }
 
   const answerData = roomData.answer || null;
-  if (answerData && answerData.sessionId && (!activeSessionId || answerData.sessionId !== activeSessionId) && answerData.updatedAt && now - answerData.updatedAt > STALE_ROOM_TTL_MS) {
+  if (answerData && answerData.sessionId && (!activeSessionId || answerData.sessionId !== activeSessionId) && isLeaseExpired(answerData, now)) {
     stalePaths.push(ref(db, `rooms/${roomName}/answer`));
   }
 
   if (roomData.callerCandidates && Object.keys(roomData.callerCandidates).length > 0) {
     const staleCallerCandidates = Object.entries(roomData.callerCandidates)
-      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && candidateData.updatedAt && now - candidateData.updatedAt > STALE_ROOM_TTL_MS)
+      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now))
       .map(([candidateId]) => ref(db, `rooms/${roomName}/callerCandidates/${candidateId}`));
     stalePaths.push(...staleCallerCandidates);
   }
 
   if (roomData.calleeCandidates && Object.keys(roomData.calleeCandidates).length > 0) {
     const staleCalleeCandidates = Object.entries(roomData.calleeCandidates)
-      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && candidateData.updatedAt && now - candidateData.updatedAt > STALE_ROOM_TTL_MS)
+      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now))
       .map(([candidateId]) => ref(db, `rooms/${roomName}/calleeCandidates/${candidateId}`));
     stalePaths.push(...staleCalleeCandidates);
   }
@@ -1504,15 +1593,18 @@ async function evaluateRoomAction(roomName) {
   const callerPresence = participantsData.caller || null;
   const calleePresence = participantsData.callee || null;
 
+  const callerActive = hasActiveLease(callerPresence);
+  const calleeActive = hasActiveLease(calleePresence);
   const hasJoinableOffer = Boolean(
     offerData &&
     offerData.sdp &&
     offerData.sdp.type === 'offer' &&
-    offerData.sessionId
+    offerData.sessionId &&
+    !isLeaseExpired(offerData)
   );
 
   if (hasJoinableOffer) {
-    if (calleePresence && calleePresence.sessionId && calleePresence.sessionId === offerData.sessionId) {
+    if (calleeActive && calleePresence.sessionId === offerData.sessionId) {
       return {
         mode: 'full',
         message: 'Room is already occupied by two participants.'
@@ -1524,7 +1616,7 @@ async function evaluateRoomAction(roomName) {
     };
   }
 
-  if ((callerPresence && callerPresence.sessionId) || (calleePresence && calleePresence.sessionId)) {
+  if (callerActive || calleeActive) {
     return {
       mode: 'busy',
       message: 'Room is in transition. Ask both peers to disconnect and retry.'
@@ -1592,6 +1684,7 @@ async function cleanupRoomArtifacts() {
 
 async function resetCallSession(statusMessage) {
   stopElapsedTimer({ reset: true });
+  stopParticipantLeaseLoop();
   clearJoinTimeout();
   unsubscribeRoomListeners();
   closePeerConnection();
@@ -1865,11 +1958,13 @@ function createPeerConnection(roomName) {
       const candidateId = `candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
       const candidateGroup = localParticipantRole === 'caller' ? 'callerCandidates' : 'calleeCandidates';
       const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
-      set(candRef, {
+      const candidatePayload = {
         sessionId: activeSessionId,
         updatedAt: Date.now(),
+        leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
         candidate: event.candidate.toJSON()
-      }).catch(err => {
+      };
+      set(candRef, candidatePayload).catch(err => {
         console.error('Failed to publish ICE candidate:', err);
       });
     }
@@ -1930,11 +2025,13 @@ async function beginStartRoom(roomName) {
     const localOfferDescription = await setLocalDescriptionSafely(peerConnection, offer);
 
     const offerRef = ref(db, `rooms/${roomName}/offer`);
-    await set(offerRef, {
+    const offerPayload = {
       sessionId: activeSessionId,
       updatedAt: Date.now(),
+      leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
       sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
-    });
+    };
+    await set(offerRef, offerPayload);
 
     await publishOwnPresence(roomName);
 
@@ -2077,8 +2174,10 @@ function listenToRoom(roomName) {
         await set(answerRef, {
           sessionId: activeSessionId,
           updatedAt: Date.now(),
+          leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
           sdp: { type: localAnswerDescription.type, sdp: localAnswerDescription.sdp }
         });
+        await publishOwnPresence(roomName);
         statusText.innerText = 'Answer transmitted. Syncing streams...';
       }
     } catch (err) {
@@ -2330,6 +2429,7 @@ bindDeviceSourceEvents(audioSource, {
 function cleanupRoomOnExit() {
   if (!activeRoomName || !localParticipantRole) return;
 
+  stopParticipantLeaseLoop();
   getRoomCleanupRefs(activeRoomName, localParticipantRole).forEach(pathRef => remove(pathRef));
 }
 

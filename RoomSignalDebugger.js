@@ -218,11 +218,18 @@ class RoomSignalDebugger {
     const now = Date.now();
     const roomName = this.roomName || 'unknown';
 
+    const callerSessionActive = this.hasLease(caller, now);
+    const calleeSessionActive = this.hasLease(callee, now);
     const callerState = caller.sessionId ? `${caller.sessionId.slice(0, 8)}… ${this.formatAge(now - (caller.updatedAt || now))}` : 'empty';
     const calleeState = callee.sessionId ? `${callee.sessionId.slice(0, 8)}… ${this.formatAge(now - (callee.updatedAt || now))}` : 'empty';
     const offerIsPresent = Boolean(offer && offer.sdp && offer.sessionId);
     const answerIsPresent = Boolean(answer && answer.sdp && answer.sessionId);
-    const stale = this.isStale(caller, now) || this.isStale(callee, now) || this.isStale(offer, now) || this.isStale(answer, now);
+    const stale = !callerSessionActive && !calleeSessionActive && (
+      this.isStale(caller, now)
+      || this.isStale(callee, now)
+      || this.isStale(offer, now)
+      || this.isStale(answer, now)
+    );
 
     document.getElementById('room-debug-status').textContent = stale ? 'STALE' : 'LIVE';
     document.getElementById('room-debug-status').style.color = stale ? '#ff7f50' : '#7ef29a';
@@ -242,8 +249,29 @@ class RoomSignalDebugger {
     document.getElementById('room-debug-last-action').textContent = offerIsPresent || answerIsPresent ? 'snapshot' : 'idle';
   }
 
+  hasLease(entry, now) {
+    if (!entry || !entry.sessionId) {
+      return false;
+    }
+
+    if (Number.isFinite(Number(entry.leaseUntil))) {
+      return Number(entry.leaseUntil) > now;
+    }
+
+    return Boolean(entry.sessionId);
+  }
+
   isStale(entry, now) {
-    if (!entry || !entry.updatedAt || !Number.isFinite(Number(entry.updatedAt))) {
+    if (!entry) {
+      return false;
+    }
+
+    const remoteLeaseUntil = Number(entry.leaseUntil);
+    if (Number.isFinite(remoteLeaseUntil)) {
+      return now >= remoteLeaseUntil;
+    }
+
+    if (!entry.updatedAt || !Number.isFinite(Number(entry.updatedAt))) {
       return false;
     }
 
