@@ -169,6 +169,21 @@ function getRoomSignalPaths(roomName, role) {
 const webRtcDebugger = new WebRTCDebugger();
 webRtcDebugger.bindToggleKey();
 
+const roomSignalDebugger = new RoomSignalDebugger();
+roomSignalDebugger.bindToggleKey();
+roomSignalDebugger.setSnapshotProvider(async (roomName) => {
+  if (!roomName || !db) {
+    return { exists: false, data: {} };
+  }
+
+  const roomSnapshot = await get(ref(db, `rooms/${roomName}`));
+  return {
+    exists: roomSnapshot.exists(),
+    data: roomSnapshot.exists() ? (roomSnapshot.val() || {}) : {}
+  };
+});
+roomSignalDebugger.start();
+
 const rtcConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -218,7 +233,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.5';
+const APP_VERSION = 'v0.5.6';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1587,6 +1602,7 @@ async function resetCallSession(statusMessage) {
     clearRoomAttempt(roomBeingReset);
   }
   activeRoomName = null;
+  roomSignalDebugger.setRoomName(null);
   localParticipantRole = null;
   activeSessionId = null;
   remotePresenceSeen = false;
@@ -1885,6 +1901,7 @@ async function beginStartRoom(roomName) {
   if (!ensureLocalStreamReady()) return;
 
   activeRoomName = roomName;
+  roomSignalDebugger.setRoomName(roomName);
   localParticipantRole = 'caller';
   activeSessionId = createSessionId();
   rememberRoomAttempt(roomName, activeSessionId, localParticipantRole);
@@ -1935,6 +1952,7 @@ async function beginJoinRoom(roomName, autoDetected = false) {
   startElapsedTimer({ reset: true });
 
   activeRoomName = roomName;
+  roomSignalDebugger.setRoomName(roomName);
   localParticipantRole = 'callee';
   activeSessionId = null;
   rememberRoomAttempt(roomName, null, localParticipantRole);
