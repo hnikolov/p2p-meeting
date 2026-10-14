@@ -94,10 +94,24 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-signInAnonymously(auth).catch((error) => {
-  console.error('Firebase anonymous sign-in failed:', error);
-  setStatusText('Could not authenticate to Firebase. Please enable Anonymous sign-in in Firebase Authentication.');
-});
+async function ensureFirebaseAuth() {
+  if (!auth) return false;
+
+  if (auth.currentUser) {
+    return true;
+  }
+
+  try {
+    await signInAnonymously(auth);
+    return true;
+  } catch (error) {
+    console.error('Firebase anonymous sign-in failed:', error);
+    setStatusText('Could not authenticate to Firebase. Please enable Anonymous sign-in in Firebase Authentication.');
+    return false;
+  }
+}
+
+ensureFirebaseAuth();
 
 let localStream;
 let remoteStream = null;
@@ -177,11 +191,27 @@ roomSignalDebugger.setSnapshotProvider(async (roomName) => {
     return { exists: false, data: {} };
   }
 
+  if (!(await ensureFirebaseAuth())) {
+    return { exists: false, data: {} };
+  }
+
   const roomSnapshot = await get(ref(db, `rooms/${roomName}`));
   return {
     exists: roomSnapshot.exists(),
     data: roomSnapshot.exists() ? (roomSnapshot.val() || {}) : {}
   };
+});
+roomSignalDebugger.setRoomsProvider(async () => {
+  if (!db) {
+    return {};
+  }
+
+  if (!(await ensureFirebaseAuth())) {
+    return {};
+  }
+
+  const roomsSnapshot = await get(ref(db, 'rooms'));
+  return roomsSnapshot.exists() ? (roomsSnapshot.val() || {}) : {};
 });
 roomSignalDebugger.start();
 
@@ -234,7 +264,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.8';
+const APP_VERSION = 'v0.5.9';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';

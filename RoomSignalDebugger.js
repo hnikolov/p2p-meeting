@@ -5,7 +5,10 @@ class RoomSignalDebugger {
     this.globalKeyHandler = null;
     this.refreshTimer = null;
     this.roomName = null;
+    this.rooms = [];
+    this.selectedRoomName = null;
     this.snapshotProvider = null;
+    this.roomsProvider = null;
   }
 
   #createHUDMarkup() {
@@ -42,6 +45,13 @@ class RoomSignalDebugger {
       <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:6px;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.12);color:#fff;">
         <strong style="letter-spacing:0.08em;font-size:11px;">ROOM SIGNAL HUD</strong>
         <span id="room-debug-status" style="color:#ffce54;font-weight:700;">IDLE</span>
+      </div>
+
+      <div style="padding:6px 8px;background:rgba(24,31,44,0.9);border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin-bottom:8px;">
+        <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">Room browser</div>
+        <select id="room-debug-room-selector" style="width:100%;max-width:100%;pointer-events:auto;background:#101727;color:#eaf2ff;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:5px 7px;font-size:11px;box-sizing:border-box;">
+          <option value="">Loading rooms...</option>
+        </select>
       </div>
 
       <div style="display:grid;gap:6px;">
@@ -93,20 +103,125 @@ class RoomSignalDebugger {
     `;
 
     document.body.appendChild(this.hudElement);
+
+    const selector = document.getElementById('room-debug-room-selector');
+    if (selector) {
+      selector.addEventListener('change', (event) => {
+        const nextRoomName = event.target && event.target.value ? String(event.target.value) : null;
+        this.selectRoom(nextRoomName);
+      });
+    }
   }
 
   setRoomName(roomName) {
-    this.roomName = roomName || null;
+    const nextRoomName = roomName || null;
+
+    if (nextRoomName && this.selectedRoomName && this.selectedRoomName !== nextRoomName) {
+      return;
+    }
+
+    this.roomName = nextRoomName;
+    this.selectedRoomName = nextRoomName;
+
     if (!this.hudElement) return;
 
     const roomNameEl = document.getElementById('room-debug-room-name');
     if (roomNameEl) {
       roomNameEl.textContent = this.roomName || 'none';
     }
+
+    const selector = document.getElementById('room-debug-room-selector');
+    if (selector && this.roomName) {
+      selector.value = this.roomName;
+    }
   }
 
   setSnapshotProvider(provider) {
     this.snapshotProvider = provider;
+  }
+
+  setRoomsProvider(provider) {
+    this.roomsProvider = provider;
+  }
+
+  async selectRoom(roomName) {
+    const nextRoomName = roomName || null;
+    this.selectedRoomName = nextRoomName;
+    this.roomName = nextRoomName;
+
+    if (this.hudElement) {
+      const selector = document.getElementById('room-debug-room-selector');
+      if (selector && nextRoomName) {
+        selector.value = nextRoomName;
+      }
+      const roomNameEl = document.getElementById('room-debug-room-name');
+      if (roomNameEl) {
+        roomNameEl.textContent = nextRoomName || 'none';
+      }
+    }
+
+    if (!nextRoomName || !this.snapshotProvider) {
+      return;
+    }
+
+    try {
+      const result = await this.snapshotProvider(nextRoomName);
+      if (this.roomName !== nextRoomName) {
+        return;
+      }
+
+      const roomData = result && result.data ? result.data : {};
+      this.renderRoomSnapshot(roomData);
+    } catch (err) {
+      console.warn('Room signal HUD room selection refresh failed:', err);
+    }
+  }
+
+  async refreshRoomList() {
+    if (!this.isVisible || !this.roomsProvider) {
+      return;
+    }
+
+    try {
+      const roomMap = await this.roomsProvider();
+      const roomNames = Object.keys(roomMap || {}).sort((left, right) => left.localeCompare(right));
+      this.rooms = roomNames;
+
+      const selector = document.getElementById('room-debug-room-selector');
+      if (!selector) {
+        return;
+      }
+
+      const previousSelection = this.selectedRoomName || this.roomName || '';
+      selector.innerHTML = '';
+
+      if (roomNames.length === 0) {
+        const emptyOption = document.createElement('option');
+        emptyOption.value = '';
+        emptyOption.textContent = 'No rooms';
+        selector.appendChild(emptyOption);
+        this.selectRoom(null);
+        return;
+      }
+
+      roomNames.forEach((roomName) => {
+        const option = document.createElement('option');
+        option.value = roomName;
+        option.textContent = roomName;
+        selector.appendChild(option);
+      });
+
+      const nextSelection = roomNames.includes(previousSelection) ? previousSelection : roomNames[0];
+      this.selectRoom(nextSelection || null);
+      selector.value = nextSelection || '';
+    } catch (err) {
+      console.warn('Room signal HUD room list refresh failed:', err);
+      const selector = document.getElementById('room-debug-room-selector');
+      if (selector) {
+        selector.innerHTML = '<option value="">Firebase rule blocks /rooms read</option>';
+        selector.title = 'Set rules so the parent rooms node is readable after auth: { "rooms": { ".read": "auth != null", ".write": "auth != null" } }';
+      }
+    }
   }
 
   bindToggleKey() {
@@ -144,12 +259,15 @@ class RoomSignalDebugger {
     }
 
     this.refreshTimer = setInterval(async () => {
-      if (!this.snapshotProvider) {
-        this.renderIdleState();
+      if (!this.isVisible) {
         return;
       }
 
-      if (!this.roomName) {
+      if (this.roomsProvider) {
+        await this.refreshRoomList();
+      }
+
+      if (!this.roomName || !this.snapshotProvider) {
         this.renderIdleState();
         return;
       }

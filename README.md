@@ -47,7 +47,26 @@ const firebaseConfig = {
 
 5. In Firebase, open **Build** > **Authentication** > **Sign-in method** and enable **Anonymous**.
 6. Open **Build** > **Realtime Database** and create the database.
-7. Set the database rules to authenticated access scoped to the room tree:
+7. Set the database rules to authenticated access scoped to the room tree.
+
+**NOTE:** The parent `rooms` node must also be readable if we want the room debug HUD to list all room names, because `get(ref(db, 'rooms'))` reads the whole collection, not only a single child node:
+
+```json
+{
+  "rules": {
+    "rooms": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    }
+  }
+}
+```
+
+If the room debug HUD would not be used, then the rules are simplified to the indivicual room IDs (recommended):
 
 ```json
 {
