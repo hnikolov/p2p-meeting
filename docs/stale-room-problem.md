@@ -38,6 +38,25 @@ without a lease or heartbeat.
 
 The browser can stop executing code abruptly, and it may not have time to run `onDisconnect()` or write a final clean state. Therefore the room must have a way to prove that a participant is still alive.
 
+## Implemented timing model
+
+The actual implementation uses a three-step lease model:
+
+- `PARTICIPANT_LEASE_REFRESH_MS = 15000`
+  - the participant record is refreshed every 15 seconds while the room is active
+- `PARTICIPANT_LEASE_TTL_MS = 30000`
+  - the participant lease is considered valid for 30 seconds, using `leaseUntil`
+- `STALE_ROOM_TTL_MS = 45000`
+  - the fallback stale threshold for legacy/aging records is 45 seconds
+
+This is the key relationship in the current fix:
+
+- refresh every 15 seconds
+- expire the lease at 30 seconds
+- allow stale cleanup only after the record is truly expired and not from the active session
+
+This matches the code in [app.js](C:/Hristo/projects/pocs/html/p2p-meeting/app.js), where participant leases are refreshed with a timer and cleanup only removes records whose lease has expired and whose `sessionId` is not the current valid session.
+
 ## The correct approach
 
 The solution is to treat participant presence as a lease instead of a one-time write.
