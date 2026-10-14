@@ -234,7 +234,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.7';
+const APP_VERSION = 'v0.5.8';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1949,7 +1949,9 @@ function createPeerConnection(roomName) {
       tryPlayRemoteVideo();
     });
 
-    statusText.innerText = 'Connected! Peer media stream verified.';
+    if (peerConnection.connectionState === 'connected' || peerConnection.signalingState === 'stable') {
+      statusText.innerText = 'Connected'; //! Peer media stream verified.';
+    }
     tryPlayRemoteVideo();
   };
 
@@ -1973,7 +1975,7 @@ function createPeerConnection(roomName) {
   peerConnection.onconnectionstatechange = () => {
     if (peerConnection.connectionState === 'connected') {
       clearJoinTimeout();
-      statusText.innerText = 'Connected! Peer connection established.';
+      statusText.innerText = 'Connected'; //! Peer connection established.
       return;
     }
 
@@ -2151,7 +2153,12 @@ function listenToRoom(roomName) {
         }
       }
 
-      if (peerConnection.remoteDescription && peerConnection.remoteDescription.sdp === data.sdp.sdp) {
+      const currentRemoteDescription = peerConnection.remoteDescription;
+      if (currentRemoteDescription && currentRemoteDescription.type === data.sdp.type && currentRemoteDescription.sdp === data.sdp.sdp) {
+        return;
+      }
+
+      if (peerConnection.signalingState === 'stable' && currentRemoteDescription) {
         return;
       }
 
@@ -2178,7 +2185,12 @@ function listenToRoom(roomName) {
           sdp: { type: localAnswerDescription.type, sdp: localAnswerDescription.sdp }
         });
         await publishOwnPresence(roomName);
-        statusText.innerText = 'Answer transmitted. Syncing streams...';
+
+        if (peerConnection.connectionState === 'connected' || peerConnection.signalingState === 'stable') {
+          statusText.innerText = 'Connected'; //! Peer media stream verified.';
+        } else {
+          statusText.innerText = 'Answer transmitted. Syncing streams...';
+        }
       }
     } catch (err) {
       console.error('Remote SDP handling failed:', err);
