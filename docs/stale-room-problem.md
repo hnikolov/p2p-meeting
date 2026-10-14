@@ -97,3 +97,5 @@ The fix makes these invariants true:
 This is the simplest maintainable solution because it keeps the current room structure and adds one clear rule: a room is valid only while its participant lease is still active.
 
 It avoids broad redesign and keeps the fix focused on the actual root cause: timestamp-only cleanup was treated as a proof of absence, but it is only a proof of inactivity.
+
+The fix is implemented in cersion v0.5.7
