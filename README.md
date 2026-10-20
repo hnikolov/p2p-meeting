@@ -98,6 +98,8 @@ Typical symptoms observed in practice:
 
 This is a WebRTC ICE/NAT traversal issue rather than a Firebase or room-creation bug. Firebase is only used for signaling; it does not carry the actual audio/video traffic. If the browser cannot find a valid ICE route between the two devices, the call appears to connect at the signaling layer but cannot send media end-to-end.
 
+A subtle app-level issue is that the UI can briefly show “Connected” once the peer connection reaches the ICE-connected state, even before the remote audio/video track is actually received. The project now treats that as a media-wait state and only reports a fully successful connection after the remote track arrives.
+
 This issue is especially common when:
 
 - one side is on a company network or VPN

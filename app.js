@@ -123,8 +123,12 @@ let remotePresenceSeen = false;
 let remoteIceQueue = [];
 let signalingUnsubscribers = [];
 let joinTimeoutId = null;
+let remoteMediaWatchdogId = null;
+let mediaRecoveryInProgress = false;
+let mediaRecoveryTimeoutId = null;
 let participantLeaseTimer = null;
 let roomAttemptState = new Map();
+let remoteMediaReady = false;
 
 function rememberRoomAttempt(roomName, sessionId = null, role = null) {
   if (!roomName) return;
@@ -215,16 +219,20 @@ roomSignalDebugger.setRoomsProvider(async () => {
 });
 roomSignalDebugger.start();
 
-const rtcConfig = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-  ],
-  iceTransportPolicy: 'all'
-};
+function buildRtcConfig({ forceRelay = false } = {}) {
+  return {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    ],
+    iceTransportPolicy: forceRelay ? 'relay' : 'all'
+  };
+}
+
+const rtcConfig = buildRtcConfig();
 
 const roomKeyInput = document.getElementById('roomKey');
 const callBtn = document.getElementById('callBtn');
@@ -264,7 +272,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.9';
+const APP_VERSION = 'v0.5.10';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1668,10 +1676,22 @@ function unsubscribeRoomListeners() {
   signalingUnsubscribers = [];
 }
 
+function clearMediaRecoveryState() {
+  if (mediaRecoveryTimeoutId) {
+    clearTimeout(mediaRecoveryTimeoutId);
+    mediaRecoveryTimeoutId = null;
+  }
+  mediaRecoveryInProgress = false;
+}
+
 function closePeerConnection() {
   if (!peerConnection) return;
 
   webRtcDebugger.stop();
+
+  clearRemoteMediaWatchdog();
+  clearMediaRecoveryState();
+  remoteMediaReady = false;
 
   peerConnection.ontrack = null;
   peerConnection.onicecandidate = null;
@@ -1716,6 +1736,8 @@ async function resetCallSession(statusMessage) {
   stopElapsedTimer({ reset: true });
   stopParticipantLeaseLoop();
   clearJoinTimeout();
+  clearRemoteMediaWatchdog();
+  clearMediaRecoveryState();
   unsubscribeRoomListeners();
   closePeerConnection();
   remoteVideo.srcObject = null;
@@ -1729,12 +1751,96 @@ async function resetCallSession(statusMessage) {
   localParticipantRole = null;
   activeSessionId = null;
   remotePresenceSeen = false;
+  remoteMediaReady = false;
   setCallButtonsEnabled(Boolean(localStream));
   syncCallButtonMode();
 
   if (statusMessage) {
     statusText.innerText = statusMessage;
   }
+}
+
+function clearRemoteMediaWatchdog() {
+  if (remoteMediaWatchdogId) {
+    clearTimeout(remoteMediaWatchdogId);
+    remoteMediaWatchdogId = null;
+  }
+}
+
+function updatePeerConnectionStatusText() {
+  if (!peerConnection) return;
+
+  if (peerConnection.connectionState === 'connected') {
+    if (remoteStream && remoteStream.getTracks().length > 0) {
+      statusText.innerText = 'Connected';
+      return;
+    }
+
+    statusText.innerText = 'Connected to signaling. Waiting for media...';
+    return;
+  }
+
+  if (peerConnection.connectionState === 'connecting') {
+    if (statusText.innerText === 'Connected to signaling. Waiting for media...') {
+      return;
+    }
+  }
+}
+
+function clearMediaWatchdog() {
+  if (remoteMediaWatchdogId) {
+    clearTimeout(remoteMediaWatchdogId);
+    remoteMediaWatchdogId = null;
+  }
+}
+
+async function recoverStalledMediaPath(roomName) {
+  if (!roomName || !peerConnection || mediaRecoveryInProgress) {
+    return;
+  }
+
+  mediaRecoveryInProgress = true;
+  statusText.innerText = 'Media path stalled. Refreshing ICE...';
+
+  try {
+    if (typeof peerConnection.restartIce === 'function') {
+      peerConnection.restartIce();
+    }
+  } catch (err) {
+    console.warn('ICE restart failed during media recovery:', err);
+  }
+
+  if (mediaRecoveryTimeoutId) {
+    clearTimeout(mediaRecoveryTimeoutId);
+  }
+
+  mediaRecoveryTimeoutId = setTimeout(async () => {
+    const stillHasRemoteTracks = Boolean(remoteStream && remoteStream.getTracks().length > 0);
+    if (peerConnection && peerConnection.connectionState === 'connected' && !stillHasRemoteTracks) {
+      await resetCallSession('Media path stalled after ICE refresh. Please try the room again.');
+      return;
+    }
+
+    mediaRecoveryInProgress = false;
+    mediaRecoveryTimeoutId = null;
+    if (peerConnection && peerConnection.connectionState === 'connected') {
+      updatePeerConnectionStatusText();
+    }
+  }, 5000);
+}
+
+function scheduleMediaWatchdog(roomName) {
+  clearMediaWatchdog();
+  remoteMediaWatchdogId = setTimeout(async () => {
+    if (!roomName || !peerConnection || peerConnection.connectionState !== 'connected') {
+      clearMediaWatchdog();
+      return;
+    }
+
+    if (!remoteStream || remoteStream.getTracks().length === 0) {
+      await recoverStalledMediaPath(roomName);
+    }
+  }, 8000);
 }
 
 async function addRemoteIceCandidate(candidateData) {
@@ -1931,13 +2037,13 @@ async function init() {
   }
 }
 
-function createPeerConnection(roomName) {
+function createPeerConnection(roomName, { forceRelay = false } = {}) {
   if (!localStream) {
     throw new Error('Local media stream is not ready.');
   }
 
   closePeerConnection();
-  peerConnection = new RTCPeerConnection(rtcConfig);
+  peerConnection = new RTCPeerConnection(buildRtcConfig({ forceRelay }));
   remoteStream = new MediaStream();
   remoteVideo.srcObject = remoteStream;
   tryPlayRemoteVideo();
@@ -1962,6 +2068,9 @@ function createPeerConnection(roomName) {
   }
 
   webRtcDebugger.start(peerConnection, localStream);
+  remoteMediaReady = false;
+  clearRemoteMediaWatchdog();
+  clearMediaRecoveryState();
 
   peerConnection.ontrack = (event) => {
     if (!remoteStream) {
@@ -1979,8 +2088,11 @@ function createPeerConnection(roomName) {
       tryPlayRemoteVideo();
     });
 
+    remoteMediaReady = true;
+    clearRemoteMediaWatchdog();
+    clearMediaRecoveryState();
     if (peerConnection.connectionState === 'connected' || peerConnection.signalingState === 'stable') {
-      statusText.innerText = 'Connected'; //! Peer media stream verified.';
+      statusText.innerText = 'Connected';
     }
     tryPlayRemoteVideo();
   };
@@ -2005,11 +2117,15 @@ function createPeerConnection(roomName) {
   peerConnection.onconnectionstatechange = () => {
     if (peerConnection.connectionState === 'connected') {
       clearJoinTimeout();
-      statusText.innerText = 'Connected'; //! Peer connection established.
+      updatePeerConnectionStatusText();
+      clearRemoteMediaWatchdog();
+      scheduleMediaWatchdog(activeRoomName);
       return;
     }
 
     if (peerConnection.connectionState === 'failed') {
+      clearRemoteMediaWatchdog();
+      clearMediaRecoveryState();
       resetCallSession('Connection failed. You can try the same room key again.');
     }
   };
@@ -2217,7 +2333,11 @@ function listenToRoom(roomName) {
         await publishOwnPresence(roomName);
 
         if (peerConnection.connectionState === 'connected' || peerConnection.signalingState === 'stable') {
-          statusText.innerText = 'Connected'; //! Peer media stream verified.';
+          if (remoteStream && remoteStream.getTracks().length > 0) {
+            statusText.innerText = 'Connected';
+          } else {
+            statusText.innerText = 'Answer transmitted. Waiting for media...';
+          }
         } else {
           statusText.innerText = 'Answer transmitted. Syncing streams...';
         }
