@@ -129,20 +129,8 @@ If the application requires explicit earpiece vs loudspeaker switching on Androi
 
 ---
 
-## 💻 Local Testing
-
-Due to modern browser security restrictions, JavaScript Modules (`type="module"`) cannot run via the local file system protocol (`file:///`). You must serve the application through a local web server layer.
-
-Open your terminal in the repository folder and run:
-
-```bash
-# Using Python 3
-python -m http.server 8000
-```
-Then navigate your browser to `http://localhost:8000`.
-
-### 📱 PWA Install Mode (Fullscreen App)
-This project now includes a PWA setup modeled after the following working pattern:
+## 📱 PWA Install Mode (Fullscreen App)
+This project uses a PWA setup modeled after the following working pattern:
 
 * `manifest.json` for app metadata and install prompts.
 * `sw.js` service worker with versioned cache + stale cache cleanup.
@@ -166,12 +154,49 @@ Install flow:
 
 ---
 
+## 💻 Local Testing
+
+Due to modern browser security restrictions, JavaScript Modules (`type="module"`) cannot run via the local file system protocol (`file:///`). You must serve the application through a local web server layer.
+
+Open your terminal in the repository folder and run:
+
+```bash
+# Using Python 3
+python -m http.server 8000
+```
+Then navigate your browser to `http://localhost:8000`.
+
+### ⚠️ Important for local testing without using the Service Worker!
+
+### - Bypass Service Worker (Recommended)
+1. Open DevTools (`F12` / `Ctrl+Shift+I` / `Cmd+Opt+I`).
+2. Go to **Application** (Chrome/Edge) or **Storage** (Firefox) tab.
+3. Select **Service Workers** in the left sidebar.
+4. Check **Bypass for network** (forces direct server fetch).
+5. Check **Update on reload** (forces script re-evaluation).
+
+### - Disable Browser Cache
+1. Open DevTools.
+2. Go to the **Network** tab.
+3. Check **Disable cache** (only works while DevTools remains open).
+
+### - Use Incognito Mode
+1. Close all active Incognito windows.
+2. Open a fresh **Incognito window** to test.
+3. Close and reopen a new Incognito window after code changes to wipe the cache.
+
+### - Hard Refresh Shortcuts
+* **Windows/Linux:** `Ctrl + F5` or `Shift + F5`
+* **Mac:** `Cmd + Shift + R`
+
+---
+
 ## 📞 How to Start a Call
 
 1. Both users open the live GitHub Pages deployment link.
 2. Grant camera and microphone permissions when prompted by your browser.
 3. Agree on a custom key (e.g., `our-private-room`).
-4. **User 1 (Host):** Type the key into the input box and click **Call**.
+4. **User 1:** Type the key into the input box and click **Call**.
 5. **User 2:** Type the *exact same* key into their box and click **Call**.
 6. The app auto-detects whether to create a new room or join the existing one for that key.
 7. The same button toggles to **Disconnect** while connected or connecting. Click it to leave and return to **Call** mode.
