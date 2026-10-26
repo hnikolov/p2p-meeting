@@ -128,7 +128,10 @@ let mediaRecoveryInProgress = false;
 let mediaRecoveryTimeoutId = null;
 let participantLeaseTimer = null;
 let roomAttemptState = new Map();
-let remoteMediaReady = false;
+let remoteMediaReady = false; // TODO: Not used?
+let reconnectTimerId = null;
+let reconnectInProgress = false;
+let reconnectAttemptCount = 0;
 
 function rememberRoomAttempt(roomName, sessionId = null, role = null) {
   if (!roomName) return;
@@ -272,7 +275,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.10';
+const APP_VERSION = 'v0.5.11';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1684,6 +1687,70 @@ function clearMediaRecoveryState() {
   mediaRecoveryInProgress = false;
 }
 
+function clearReconnectTimer() {
+  if (reconnectTimerId) {
+    clearTimeout(reconnectTimerId);
+    reconnectTimerId = null;
+  }
+}
+
+async function beginReconnectFlow(roomName) {
+  if (!roomName || !localParticipantRole || reconnectInProgress) return;
+
+  reconnectInProgress = true;
+  remotePresenceSeen = false;
+  clearReconnectTimer();
+  clearJoinTimeout();
+  stopParticipantLeaseLoop();
+  unsubscribeRoomListeners();
+  closePeerConnection();
+
+  const reconnectAttempt = reconnectAttemptCount + 1;
+  statusText.innerText = `Connection lost. Reconnecting${reconnectAttempt > 1 ? ` (attempt ${reconnectAttempt})` : ''}...`;
+
+  try {
+    if (localParticipantRole === 'caller') {
+      activeSessionId = createSessionId();
+      rememberRoomAttempt(roomName, activeSessionId, localParticipantRole);
+      createPeerConnection(roomName);
+      listenToRoom(roomName);
+
+      const offer = await peerConnection.createOffer();
+      const localOfferDescription = await setLocalDescriptionSafely(peerConnection, offer);
+      const offerRef = ref(db, `rooms/${roomName}/offer`);
+      await set(offerRef, {
+        sessionId: activeSessionId,
+        updatedAt: Date.now(),
+        leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
+        sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
+      });
+      await publishOwnPresence(roomName);
+    } else {
+      activeSessionId = null;
+      rememberRoomAttempt(roomName, null, localParticipantRole);
+      createPeerConnection(roomName);
+      listenToRoom(roomName);
+    }
+
+    reconnectAttemptCount = 0;
+  } catch (err) {
+    console.error('Reconnect failed:', err);
+    reconnectAttemptCount += 1;
+    if (reconnectAttemptCount < 4) {
+      const delayMs = Math.min(1000 * Math.pow(2, reconnectAttemptCount - 1), 8000);
+      reconnectTimerId = setTimeout(async () => {
+        reconnectTimerId = null;
+        await beginReconnectFlow(roomName);
+      }, delayMs);
+      return;
+    }
+
+    await resetCallSession('Connection lost. Press Call to retry.');
+  } finally {
+    reconnectInProgress = false;
+  }
+}
+
 function closePeerConnection() {
   if (!peerConnection) return;
 
@@ -1736,11 +1803,13 @@ async function resetCallSession(statusMessage) {
   stopElapsedTimer({ reset: true });
   stopParticipantLeaseLoop();
   clearJoinTimeout();
+  clearReconnectTimer();
   clearRemoteMediaWatchdog();
   clearMediaRecoveryState();
   unsubscribeRoomListeners();
   closePeerConnection();
   remoteVideo.srcObject = null;
+  reconnectAttemptCount = 0;
   const roomBeingReset = activeRoomName;
   await cleanupRoomArtifacts();
   if (roomBeingReset) {
@@ -1752,6 +1821,7 @@ async function resetCallSession(statusMessage) {
   activeSessionId = null;
   remotePresenceSeen = false;
   remoteMediaReady = false;
+  reconnectInProgress = false;
   setCallButtonsEnabled(Boolean(localStream));
   syncCallButtonMode();
 
@@ -2119,14 +2189,21 @@ function createPeerConnection(roomName, { forceRelay = false } = {}) {
       clearJoinTimeout();
       updatePeerConnectionStatusText();
       clearRemoteMediaWatchdog();
+      reconnectAttemptCount = 0;
       scheduleMediaWatchdog(activeRoomName);
       return;
     }
 
-    if (peerConnection.connectionState === 'failed') {
+    if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
       clearRemoteMediaWatchdog();
       clearMediaRecoveryState();
-      resetCallSession('Connection failed. You can try the same room key again.');
+      if (!activeRoomName || !localParticipantRole || reconnectInProgress) {
+        return;
+      }
+
+      beginReconnectFlow(activeRoomName).catch(err => {
+        console.error('Reconnect flow failed after connection loss:', err);
+      });
     }
   };
 }
