@@ -94,6 +94,19 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
+// Lease timestamps are compared across different machines, so they must use
+// the Firebase server clock rather than each client's (possibly skewed) clock.
+let serverTimeOffsetMs = 0;
+function serverNow() {
+  return Date.now() + serverTimeOffsetMs;
+}
+onValue(ref(db, '.info/serverTimeOffset'), (snapshot) => {
+  const offset = Number(snapshot.val());
+  if (Number.isFinite(offset)) {
+    serverTimeOffsetMs = offset;
+  }
+});
+
 async function ensureFirebaseAuth() {
   if (!auth) return false;
 
@@ -275,7 +288,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.11';
+const APP_VERSION = 'v0.5.12';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -323,7 +336,11 @@ let viewportMetricsRafId = 0;
 let elapsedTimerId = 0;
 let elapsedTimerStartedAt = 0;
 let isMediaChanging = false;
-const STALE_ROOM_TTL_MS = 45000;
+// Generous TTLs: a waiting tab may be throttled/frozen in the background for
+// minutes, and a false "expired" verdict makes a second visitor create a competing room.
+const STALE_ROOM_TTL_MS = 180000;
+// Records are only deleted by other clients after being expired for this much longer.
+const STALE_CLEANUP_GRACE_MS = 300000;
 
 function formatElapsedTime(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -1445,11 +1462,11 @@ function createSessionId() {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const PARTICIPANT_LEASE_TTL_MS = 30000;
+const PARTICIPANT_LEASE_TTL_MS = 180000;
 const PARTICIPANT_LEASE_REFRESH_MS = 15000;
 
 function buildParticipantLease(sessionId, role) {
-  const now = Date.now();
+  const now = serverNow();
   return {
     sessionId,
     role,
@@ -1458,18 +1475,18 @@ function buildParticipantLease(sessionId, role) {
   };
 }
 
-function isLeaseExpired(record, now = Date.now()) {
+function isLeaseExpired(record, now = serverNow(), graceMs = 0) {
   if (!record) return true;
 
   if (typeof record.leaseUntil === 'number') {
-    return record.leaseUntil <= now;
+    return record.leaseUntil + graceMs <= now;
   }
 
   const updatedAt = Number(record.updatedAt || now);
-  return now - updatedAt > STALE_ROOM_TTL_MS;
+  return now - updatedAt > STALE_ROOM_TTL_MS + graceMs;
 }
 
-function hasActiveLease(record, now = Date.now()) {
+function hasActiveLease(record, now = serverNow()) {
   if (!record || !record.sessionId) return false;
   if (typeof record.leaseUntil === 'number') {
     return record.leaseUntil > now;
@@ -1477,10 +1494,31 @@ function hasActiveLease(record, now = Date.now()) {
   return !isLeaseExpired(record, now);
 }
 
+let participantLeaseWorker = null;
+
 function stopParticipantLeaseLoop() {
   if (participantLeaseTimer) {
     clearInterval(participantLeaseTimer);
     participantLeaseTimer = null;
+  }
+  if (participantLeaseWorker) {
+    participantLeaseWorker.terminate();
+    participantLeaseWorker = null;
+  }
+}
+
+// Writes a fresh lease for our own participant slot and signal (offer/answer).
+async function renewParticipantLease(roomName) {
+  if (!activeRoomName || activeRoomName !== roomName || !localParticipantRole || !activeSessionId) {
+    return;
+  }
+
+  try {
+    const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
+    await set(ownPresenceRef, buildParticipantLease(activeSessionId, localParticipantRole));
+    await refreshActiveRoomSignalLease(roomName);
+  } catch (err) {
+    console.warn('Lease renewal failed:', err);
   }
 }
 
@@ -1507,8 +1545,8 @@ async function refreshActiveRoomSignalLease(roomName) {
   const refreshedValue = {
     ...currentValue,
     sessionId: activeSessionId,
-    updatedAt: Date.now(),
-    leaseUntil: Date.now() + STALE_ROOM_TTL_MS
+    updatedAt: serverNow(),
+    leaseUntil: serverNow() + STALE_ROOM_TTL_MS
   };
 
   await set(signalRef, refreshedValue);
@@ -1518,17 +1556,63 @@ function startParticipantLeaseLoop(roomName) {
   if (!roomName || !localParticipantRole || !activeSessionId) return;
 
   stopParticipantLeaseLoop();
-  participantLeaseTimer = setInterval(async () => {
+
+  const onTick = () => {
     if (!activeRoomName || activeRoomName !== roomName || !localParticipantRole || !activeSessionId) {
       stopParticipantLeaseLoop();
       return;
     }
+    renewParticipantLease(roomName);
+  };
 
-    const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
-    await set(ownPresenceRef, buildParticipantLease(activeSessionId, localParticipantRole));
-    await refreshActiveRoomSignalLease(roomName);
-  }, PARTICIPANT_LEASE_REFRESH_MS);
+  // Timers inside a Worker are not throttled/frozen like background-tab timers,
+  // so a waiting host keeps its lease alive while the tab is hidden.
+  try {
+    const workerSource = `setInterval(() => postMessage(0), ${PARTICIPANT_LEASE_REFRESH_MS});`;
+    const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }));
+    participantLeaseWorker = new Worker(workerUrl);
+    URL.revokeObjectURL(workerUrl);
+    participantLeaseWorker.onmessage = onTick;
+    participantLeaseWorker.onerror = () => {
+      if (participantLeaseWorker) {
+        participantLeaseWorker.terminate();
+        participantLeaseWorker = null;
+      }
+      if (!participantLeaseTimer) {
+        participantLeaseTimer = setInterval(onTick, PARTICIPANT_LEASE_REFRESH_MS);
+      }
+    };
+  } catch (err) {
+    participantLeaseWorker = null;
+    participantLeaseTimer = setInterval(onTick, PARTICIPANT_LEASE_REFRESH_MS);
+  }
 }
+
+// Renew immediately when the tab wakes up / regains network, and re-register the
+// server-side disconnect hook after a Firebase reconnect (it is lost on disconnect).
+async function reassertPresence() {
+  const roomName = activeRoomName;
+  if (!roomName || !localParticipantRole || !activeSessionId) return;
+
+  await renewParticipantLease(roomName);
+  try {
+    const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
+    await onDisconnect(ownPresenceRef).remove();
+  } catch (err) {
+    console.warn('Could not re-register onDisconnect:', err);
+  }
+}
+
+onValue(ref(db, '.info/connected'), (snapshot) => {
+  if (snapshot.val() === true) {
+    reassertPresence();
+  }
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') reassertPresence();
+});
+window.addEventListener('online', reassertPresence);
+window.addEventListener('focus', reassertPresence);
 
 function getRemoteParticipantRole() {
   if (localParticipantRole === 'caller') return 'callee';
@@ -1549,7 +1633,7 @@ async function publishOwnPresence(roomName) {
 async function claimRoleSlot(roomName, role, sessionId) {
   const slotRef = ref(db, `rooms/${roomName}/participants/${role}`);
   const claimResult = await runTransaction(slotRef, currentValue => {
-    const now = Date.now();
+    const now = serverNow();
     const shouldReplace = !currentValue || !currentValue.sessionId || currentValue.sessionId === sessionId || (
       typeof currentValue.leaseUntil === 'number'
         ? currentValue.leaseUntil <= now
@@ -1578,42 +1662,47 @@ async function cleanupStaleRoomState(roomName) {
   const roomData = roomSnapshot.val() || {};
   const participants = roomData.participants || {};
   const stalePaths = [];
-  const now = Date.now();
+  const now = serverNow();
 
   Object.entries(participants).forEach(([role, participant]) => {
     if (!participant || !participant.sessionId) return;
     if (activeSessionId && participant.sessionId === activeSessionId) return;
-    if (isLeaseExpired(participant, now)) {
+    if (isLeaseExpired(participant, now, STALE_CLEANUP_GRACE_MS)) {
       stalePaths.push(ref(db, `rooms/${roomName}/participants/${role}`));
     }
   });
 
   const offerData = roomData.offer || null;
-  if (offerData && offerData.sessionId && (!activeSessionId || offerData.sessionId !== activeSessionId) && isLeaseExpired(offerData, now)) {
+  if (offerData && offerData.sessionId && (!activeSessionId || offerData.sessionId !== activeSessionId) && isLeaseExpired(offerData, now, STALE_CLEANUP_GRACE_MS)) {
     stalePaths.push(ref(db, `rooms/${roomName}/offer`));
   }
 
   const answerData = roomData.answer || null;
-  if (answerData && answerData.sessionId && (!activeSessionId || answerData.sessionId !== activeSessionId) && isLeaseExpired(answerData, now)) {
+  if (answerData && answerData.sessionId && (!activeSessionId || answerData.sessionId !== activeSessionId) && isLeaseExpired(answerData, now, STALE_CLEANUP_GRACE_MS)) {
     stalePaths.push(ref(db, `rooms/${roomName}/answer`));
   }
 
   if (roomData.callerCandidates && Object.keys(roomData.callerCandidates).length > 0) {
     const staleCallerCandidates = Object.entries(roomData.callerCandidates)
-      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now))
+      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now, STALE_CLEANUP_GRACE_MS))
       .map(([candidateId]) => ref(db, `rooms/${roomName}/callerCandidates/${candidateId}`));
     stalePaths.push(...staleCallerCandidates);
   }
 
   if (roomData.calleeCandidates && Object.keys(roomData.calleeCandidates).length > 0) {
     const staleCalleeCandidates = Object.entries(roomData.calleeCandidates)
-      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now))
+      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now, STALE_CLEANUP_GRACE_MS))
       .map(([candidateId]) => ref(db, `rooms/${roomName}/calleeCandidates/${candidateId}`));
     stalePaths.push(...staleCalleeCandidates);
   }
 
   if (stalePaths.length === 0) return;
 
+  console.warn('[room-cleanup] removing stale room state', {
+    roomName,
+    paths: stalePaths.map(pathRef => pathRef.toString()),
+    serverTimeOffsetMs
+  });
   await Promise.allSettled(stalePaths.map(pathRef => remove(pathRef)));
   clearRoomAttempt(roomName);
   statusText.innerText = 'Recovered stale room state.';
@@ -1641,8 +1730,19 @@ async function evaluateRoomAction(roomName) {
     offerData.sdp &&
     offerData.sdp.type === 'offer' &&
     offerData.sessionId &&
-    !isLeaseExpired(offerData)
+    !isLeaseExpired(offerData, serverNow(), STALE_CLEANUP_GRACE_MS)
   );
+
+  console.info('[room-eval]', {
+    roomName,
+    hasOffer: Boolean(offerData),
+    offerLeaseRemainingMs: offerData && typeof offerData.leaseUntil === 'number' ? offerData.leaseUntil - serverNow() : null,
+    offerAgeMs: offerData && offerData.updatedAt ? serverNow() - offerData.updatedAt : null,
+    callerActive,
+    calleeActive,
+    serverTimeOffsetMs,
+    hasJoinableOffer
+  });
 
   if (hasJoinableOffer) {
     if (calleeActive && calleePresence.sessionId === offerData.sessionId) {
@@ -1720,8 +1820,8 @@ async function beginReconnectFlow(roomName) {
       const offerRef = ref(db, `rooms/${roomName}/offer`);
       await set(offerRef, {
         sessionId: activeSessionId,
-        updatedAt: Date.now(),
-        leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
+        updatedAt: serverNow(),
+        leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
         sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
       });
       await publishOwnPresence(roomName);
@@ -2174,8 +2274,8 @@ function createPeerConnection(roomName, { forceRelay = false } = {}) {
       const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
       const candidatePayload = {
         sessionId: activeSessionId,
-        updatedAt: Date.now(),
-        leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
+        updatedAt: serverNow(),
+        leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
         candidate: event.candidate.toJSON()
       };
       set(candRef, candidatePayload).catch(err => {
@@ -2252,8 +2352,8 @@ async function beginStartRoom(roomName) {
     const offerRef = ref(db, `rooms/${roomName}/offer`);
     const offerPayload = {
       sessionId: activeSessionId,
-      updatedAt: Date.now(),
-      leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
+      updatedAt: serverNow(),
+      leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
       sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
     };
     await set(offerRef, offerPayload);
@@ -2403,8 +2503,8 @@ function listenToRoom(roomName) {
         const answerRef = ref(db, `rooms/${roomName}/answer`);
         await set(answerRef, {
           sessionId: activeSessionId,
-          updatedAt: Date.now(),
-          leaseUntil: Date.now() + STALE_ROOM_TTL_MS,
+          updatedAt: serverNow(),
+          leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
           sdp: { type: localAnswerDescription.type, sdp: localAnswerDescription.sdp }
         });
         await publishOwnPresence(roomName);

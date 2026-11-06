@@ -99,3 +99,18 @@ This is the simplest maintainable solution because it keeps the current room str
 It avoids broad redesign and keeps the fix focused on the actual root cause: timestamp-only cleanup was treated as a proof of absence, but it is only a proof of inactivity.
 
 The fix is implemented in version v0.5.7
+
+## Follow-up (v0.5.12): second visitor created a competing room
+
+Symptom: a friend waits in a room for minutes; the other person types the same key and gets "Room created" instead of joining. Cause: the waiting caller's lease looked expired to the joiner, so `cleanupStaleRoomState` deleted the live offer. Contributing factors:
+
+- lease refresh ran on a `setInterval` that browsers throttle/freeze in background tabs, during sleep, or under Memory Saver;
+- lease timestamps used each client's own `Date.now()`, so clock skew between two machines made fresh leases look expired;
+- `onDisconnect().remove()` was registered once and lost after a Firebase reconnect.
+
+Changes:
+
+- `serverNow()` (Firebase `.info/serverTimeOffset`) is used for every lease write/compare;
+- `STALE_ROOM_TTL_MS` and `PARTICIPANT_LEASE_TTL_MS` raised to 180 s; other clients only delete records expired for a further `STALE_CLEANUP_GRACE_MS` (300 s), and an offer within that grace is still treated as joinable (the 15 s join timeout covers a truly dead host);
+- lease refresh is driven by a Web Worker timer (fallback `setInterval`), and `reassertPresence()` runs on Firebase reconnect, `visibilitychange`, `focus` and `online`;
+- `[room-eval]` / `[room-cleanup]` console logs show lease remaining, server offset and what was deleted, to diagnose any recurrence.
