@@ -81,10 +81,7 @@ The app configures ICE servers in `rtcConfig`:
 const rtcConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'stun:stun1.l.google.com:19302' }
   ],
   iceTransportPolicy: 'all'
 };
@@ -93,9 +90,9 @@ const rtcConfig = {
 This tells the browser:
 
 - try direct peer-to-peer using public STUN servers to discover address/port mapping
-- if necessary, allow TURN relay candidates as fallback
+- no TURN relay is configured (the free openrelay.metered.ca service stopped responding); add one to `buildRtcConfig()` if a network blocks direct calls
 
-This means the app is designed to work in both direct and relayed scenarios, but the actual relay service is external, not built into the app itself.
+A relay service would be external, not built into the app itself.
 
 ### 3.4 Browser media selection and audio pipeline
 
@@ -240,7 +237,7 @@ Typical cases:
 
 A TURN server accepts media from one peer and forwards it to the other; this allows the call to continue even when direct routing is blocked.
 
-In this app, TURN endpoints are configured in the ICE server list, so the browser is allowed to use a relay if needed. However, the project does not host its own TURN server; it uses public TURN endpoints as a fallback option.
+This app currently configures no TURN server: the free public openrelay.metered.ca endpoints it used stopped responding and were removed. Calls therefore need a direct (host or STUN-discovered) path; add a TURN server to `buildRtcConfig()` in app.js if a network requires a relay.
 
 ### 7.3 Important nuance: TURN is not implemented as a custom app server
 

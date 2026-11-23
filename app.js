@@ -158,10 +158,9 @@ function buildRtcConfig({ forceRelay = false } = {}) {
   return {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+      { urls: 'stun:stun1.l.google.com:19302' }
+      // No TURN relay configured: the free openrelay.metered.ca service no longer
+      // responds. Add a working TURN server here if a network blocks direct calls.
     ],
     iceTransportPolicy: forceRelay ? 'relay' : 'all'
   };
@@ -205,7 +204,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.6.0';
+const APP_VERSION = 'v0.6.1';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -1550,7 +1549,35 @@ const CALL_STATUS_TEXT = {
   error: () => 'Could not join the room. Check Firebase connectivity and try again.'
 };
 
-let elapsedTimerNeedsReset = false;
+// The elapsed timer has two modes:
+//  - 'waiting': counts from pressing Call until the call connects
+//  - 'call':    counts the call duration; starts at zero when the call
+//               connects and is NOT reset by an ICE restart or rejoin.
+// When the call ends (Leave, or the other person leaves) the value freezes,
+// so the last call duration stays visible; a new connection starts again at 0.
+let elapsedTimerMode = null;
+
+function freezeElapsedTimer() {
+  elapsedTimerMode = null;
+  stopElapsedTimer();
+}
+
+function setElapsedTimerMode(mode) {
+  elapsedTimerMode = mode;
+
+  if (!mode) {
+    stopElapsedTimer({ reset: true });
+  } else {
+    startElapsedTimer({ reset: true });
+  }
+
+  if (elapsedTimeText) {
+    elapsedTimeText.classList.toggle('elapsed-time-waiting', mode === 'waiting');
+    elapsedTimeText.title = mode === 'waiting'
+      ? 'Waiting time'
+      : mode === 'call' ? 'Call duration' : 'Elapsed time';
+  }
+}
 
 // Adds the local tracks (with our encoding preferences) to a new peer connection.
 function attachLocalMedia(pc) {
@@ -1601,23 +1628,20 @@ function handlePeerConnectionChange(pc) {
   }
 
   peerConnection = pc || null;
-
-  if (!peerConnection) {
-    stopElapsedTimer({ reset: true });
-    return;
-  }
+  if (!peerConnection) return;
 
   remoteStream = new MediaStream();
   remoteVideo.srcObject = remoteStream;
   tryPlayRemoteVideo();
   webRtcDebugger.start(peerConnection, localStream);
-  elapsedTimerNeedsReset = true;
 }
 
 function handleCallStatus(phase) {
-  if (phase === 'connected' && elapsedTimerNeedsReset) {
-    elapsedTimerNeedsReset = false;
-    startElapsedTimer({ reset: true });
+  if (phase === 'connected' && elapsedTimerMode !== 'call') {
+    setElapsedTimerMode('call');
+  } else if (phase === 'peer-left' && elapsedTimerMode === 'call') {
+    // Usually the end of the meeting: freeze the call duration, as on Leave.
+    freezeElapsedTimer();
   }
 
   const statusFor = CALL_STATUS_TEXT[phase];
@@ -1635,6 +1659,7 @@ function startCallSession(roomName) {
   activeRoomName = roomName;
   roomSignalDebugger.setRoomName(roomName);
   syncCallButtonMode();
+  setElapsedTimerMode('waiting');
 
   meetingSession = createMeetingSession({
     db,
@@ -1654,6 +1679,8 @@ async function endCallSession(statusMessage) {
   roomSignalDebugger.setRoomName(null);
   setCallButtonsEnabled(Boolean(localStream));
   syncCallButtonMode();
+
+  freezeElapsedTimer();
 
   if (statusMessage) {
     statusText.innerText = statusMessage;
