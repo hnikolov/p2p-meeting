@@ -30,24 +30,21 @@ The core app logic is in `app.js`, and the architecture is described in `docs/p2
 
 When debugging a WebRTC issue, do not jump directly to editing the app. First reason through the full lifecycle.
 
-1. Confirm the room/key flow
-   - Is the room being created or joined correctly?
-   - Is one side the caller and the other the callee?
-   - Are participant slots or room state being cleaned up correctly?
+1. Confirm the room/key flow (see `docs/signaling-design.md`)
+   - Are both peers listed under `rooms/{roomName}/members`?
+   - There are no caller/callee roles: the polite/impolite side follows from comparing the peer ids.
+   - Presence comes from server-side `onDisconnect()`. Clients never delete each other's data.
 
 2. Trace signaling state
-   - Check Firebase paths such as:
-     - `rooms/{roomName}/offer`
-     - `rooms/{roomName}/answer`
-     - `rooms/{roomName}/callerCandidates`
-     - `rooms/{roomName}/calleeCandidates`
-     - `rooms/{roomName}/participants/caller`
-     - `rooms/{roomName}/participants/callee`
+   - Check the Firebase paths:
+     - `rooms/{roomName}/members/{peerId}`
+     - `rooms/{roomName}/signals/{fromId}/{toId}/{pushId}` (descriptions and candidates)
    - Confirm that the remote side actually receives the SDP and ICE candidate data.
+   - Legacy v0.5.x keys (`offer`, `answer`, `participants`, `*Candidates`) are ignored by the app.
 
 3. Trace peer connection state
    - Check `onicecandidate`, `ontrack`, `onconnectionstatechange`, and `iceconnectionstatechange`.
-   - Verify the peer connection is created only once per role.
+   - Verify one peer connection exists per (self peer id, remote peer id) pairing.
    - Look for duplicate listeners, stale state, or reset flows that leave old connections behind.
 
 4. Separate signaling success from media success
@@ -67,13 +64,13 @@ When debugging a WebRTC issue, do not jump directly to editing the app. First re
 
 6. Verify cleanup and stale data
    - When a room is abandoned or a peer disconnects, stale Firebase state can confuse the next attempt.
-   - Look for cleanup via `remove()`, `onDisconnect()`, `runTransaction()`, and room reset flows.
+   - Each peer removes only its own `members/{self}` and `signals/{self}`; the server removes them through `onDisconnect()` when a browser goes away.
 
 ## Questions to answer before proposing a fix
 
 When debugging WebRTC here, the assistant should explicitly answer:
 
-- Is the problem in room creation, join logic, or role assignment?
+- Is the problem in membership (joining), negotiation, or ICE connectivity?
 - Did the offer or answer arrive at the expected Firebase path?
 - Are the ICE candidates being published and consumed as expected?
 - Does the remote side receive a `MediaStreamTrack` via `ontrack`?
@@ -84,12 +81,12 @@ When debugging WebRTC here, the assistant should explicitly answer:
 
 The assistant should pay special attention to the following patterns in this codebase:
 
-- `runTransaction()` used for role assignment and session coordination
+- `runTransaction()` used to admit at most two members to a room
 - `onChildAdded()` or `onValue()` listeners for remote SDP/candidates
 - `setLocalDescription()` and `setRemoteDescription()` time ordering
-- `addIceCandidate()` usage and candidate queuing
+- `addIceCandidate()` usage and the in-order signal processing chain in `meeting-session.js`
 - `peerConnection.ontrack` to confirm remote media arrives
-- cleanup logic around `beforeunload`, disconnect handlers, and role-specific Firebase paths
+- server-side `onDisconnect()` registration (and re-registration after a Firebase reconnect) for `members/{self}` and `signals/{self}`
 
 ## Rules for diagnosis
 

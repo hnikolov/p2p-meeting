@@ -77,8 +77,9 @@ window.addEventListener('orientationchange', handleMediaLayoutChange);
 document.addEventListener('DOMContentLoaded', handleMediaLayoutChange);
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getDatabase, get, ref, runTransaction, set, onChildAdded, onValue, remove, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
+import { getDatabase, get, ref } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js';
 import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
+import { createMeetingSession } from './meeting-session.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyB2F_QfZFAwitJrFEcvCTadOsLOVETkRpg',
@@ -94,19 +95,6 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// Lease timestamps are compared across different machines, so they must use
-// the Firebase server clock rather than each client's (possibly skewed) clock.
-let serverTimeOffsetMs = 0;
-function serverNow() {
-  return Date.now() + serverTimeOffsetMs;
-}
-onValue(ref(db, '.info/serverTimeOffset'), (snapshot) => {
-  const offset = Number(snapshot.val());
-  if (Number.isFinite(offset)) {
-    serverTimeOffsetMs = offset;
-  }
-});
-
 async function ensureFirebaseAuth() {
   if (!auth) return false;
 
@@ -119,7 +107,7 @@ async function ensureFirebaseAuth() {
     return true;
   } catch (error) {
     console.error('Firebase anonymous sign-in failed:', error);
-    setStatusText('Could not authenticate to Firebase. Please enable Anonymous sign-in in Firebase Authentication.');
+    statusText.innerText = 'Could not authenticate to Firebase. Please enable Anonymous sign-in in Firebase Authentication.';
     return false;
   }
 }
@@ -130,76 +118,7 @@ let localStream;
 let remoteStream = null;
 let peerConnection;
 let activeRoomName = null;
-let localParticipantRole = null;
-let activeSessionId = null;
-let remotePresenceSeen = false;
-let remoteIceQueue = [];
-let signalingUnsubscribers = [];
-let joinTimeoutId = null;
-let remoteMediaWatchdogId = null;
-let mediaRecoveryInProgress = false;
-let mediaRecoveryTimeoutId = null;
-let participantLeaseTimer = null;
-let roomAttemptState = new Map();
-let remoteMediaReady = false; // TODO: Not used?
-let reconnectTimerId = null;
-let reconnectInProgress = false;
-let reconnectAttemptCount = 0;
-
-function rememberRoomAttempt(roomName, sessionId = null, role = null) {
-  if (!roomName) return;
-
-  const existing = roomAttemptState.get(roomName) || {};
-  roomAttemptState.set(roomName, {
-    ...existing,
-    sessionId: sessionId ?? existing.sessionId ?? null,
-    role: role ?? existing.role ?? null,
-    updatedAt: Date.now()
-  });
-}
-
-function clearRoomAttempt(roomName) {
-  if (!roomName) return;
-  roomAttemptState.delete(roomName);
-}
-
-function pruneRoomAttempts() {
-  const now = Date.now();
-
-  for (const [roomName, attempt] of [...roomAttemptState.entries()]) {
-    if (!attempt || !attempt.updatedAt || now - attempt.updatedAt > STALE_ROOM_TTL_MS) {
-      roomAttemptState.delete(roomName);
-    }
-  }
-}
-
-function getRoomCleanupPaths(roomName, role) {
-  const roomBasePath = `rooms/${roomName}`;
-
-  if (role === 'caller') {
-    return {
-      offer: `${roomBasePath}/offer`,
-      candidates: `${roomBasePath}/callerCandidates`,
-      participant: `${roomBasePath}/participants/caller`
-    };
-  }
-
-  return {
-    offer: `${roomBasePath}/answer`,
-    candidates: `${roomBasePath}/calleeCandidates`,
-    participant: `${roomBasePath}/participants/callee`
-  };
-}
-
-function getRoomSignalPaths(roomName, role) {
-  const isCaller = role === 'caller';
-
-  return {
-    remoteSdpPath: isCaller ? `rooms/${roomName}/answer` : `rooms/${roomName}/offer`,
-    remoteCandidatesPath: isCaller ? `rooms/${roomName}/calleeCandidates` : `rooms/${roomName}/callerCandidates`,
-    remotePresencePath: `rooms/${roomName}/participants/${isCaller ? 'callee' : 'caller'}`
-  };
-}
+let meetingSession = null;
 
 const webRtcDebugger = new WebRTCDebugger();
 webRtcDebugger.bindToggleKey();
@@ -248,8 +167,6 @@ function buildRtcConfig({ forceRelay = false } = {}) {
   };
 }
 
-const rtcConfig = buildRtcConfig();
-
 const roomKeyInput = document.getElementById('roomKey');
 const callBtn = document.getElementById('callBtn');
 const muteBtn = document.getElementById('muteBtn');
@@ -288,7 +205,7 @@ const sizeBtn = document.getElementById('sizeBtn');
 const appVersionText = document.getElementById('appVersion');
 const elapsedTimeText = document.getElementById('elapsedTime');
 
-const APP_VERSION = 'v0.5.12';
+const APP_VERSION = 'v0.6.0';
 const ROOM_KEY_STORAGE_KEY = 'p2p-meeting:last-room-key';
 const PIP_LAYOUT_STORAGE_KEY = 'p2p-meeting:pip-layout-v1';
 const DEVICE_SETTINGS_STORAGE_KEY = 'p2p-meeting:device-settings-v1';
@@ -336,11 +253,6 @@ let viewportMetricsRafId = 0;
 let elapsedTimerId = 0;
 let elapsedTimerStartedAt = 0;
 let isMediaChanging = false;
-// Generous TTLs: a waiting tab may be throttled/frozen in the background for
-// minutes, and a false "expired" verdict makes a second visitor create a competing room.
-const STALE_ROOM_TTL_MS = 180000;
-// Records are only deleted by other clients after being expired for this much longer.
-const STALE_CLEANUP_GRACE_MS = 300000;
 
 function formatElapsedTime(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -568,20 +480,6 @@ function applyAudioSenderEncodingPreferences(audioSender) {
 
   audioSender.setParameters(audioParameters)
     .catch(err => console.warn('Audio sender bitrate tuning skipped by browser:', err));
-}
-
-async function setLocalDescriptionSafely(peerConn, description) {
-  if (!peerConn || !description) {
-    throw new Error('Peer connection and description are required.');
-  }
-
-  try {
-    await peerConn.setLocalDescription(description);
-    return peerConn.localDescription || description;
-  } catch (err) {
-    console.warn('setLocalDescription rejected with the original SDP; aborting call setup:', err);
-    throw err;
-  }
 }
 
 async function getAudioInputStream(deviceId = null) {
@@ -1458,585 +1356,6 @@ function handleKeyboardShortcuts(event) {
   }
 }
 
-function createSessionId() {
-  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-const PARTICIPANT_LEASE_TTL_MS = 180000;
-const PARTICIPANT_LEASE_REFRESH_MS = 15000;
-
-function buildParticipantLease(sessionId, role) {
-  const now = serverNow();
-  return {
-    sessionId,
-    role,
-    updatedAt: now,
-    leaseUntil: now + PARTICIPANT_LEASE_TTL_MS
-  };
-}
-
-function isLeaseExpired(record, now = serverNow(), graceMs = 0) {
-  if (!record) return true;
-
-  if (typeof record.leaseUntil === 'number') {
-    return record.leaseUntil + graceMs <= now;
-  }
-
-  const updatedAt = Number(record.updatedAt || now);
-  return now - updatedAt > STALE_ROOM_TTL_MS + graceMs;
-}
-
-function hasActiveLease(record, now = serverNow()) {
-  if (!record || !record.sessionId) return false;
-  if (typeof record.leaseUntil === 'number') {
-    return record.leaseUntil > now;
-  }
-  return !isLeaseExpired(record, now);
-}
-
-let participantLeaseWorker = null;
-
-function stopParticipantLeaseLoop() {
-  if (participantLeaseTimer) {
-    clearInterval(participantLeaseTimer);
-    participantLeaseTimer = null;
-  }
-  if (participantLeaseWorker) {
-    participantLeaseWorker.terminate();
-    participantLeaseWorker = null;
-  }
-}
-
-// Writes a fresh lease for our own participant slot and signal (offer/answer).
-async function renewParticipantLease(roomName) {
-  if (!activeRoomName || activeRoomName !== roomName || !localParticipantRole || !activeSessionId) {
-    return;
-  }
-
-  try {
-    const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
-    await set(ownPresenceRef, buildParticipantLease(activeSessionId, localParticipantRole));
-    await refreshActiveRoomSignalLease(roomName);
-  } catch (err) {
-    console.warn('Lease renewal failed:', err);
-  }
-}
-
-async function refreshActiveRoomSignalLease(roomName) {
-  if (!roomName || !activeSessionId || !localParticipantRole) {
-    return;
-  }
-
-  const signalPath = localParticipantRole === 'caller'
-    ? `rooms/${roomName}/offer`
-    : `rooms/${roomName}/answer`;
-
-  const signalRef = ref(db, signalPath);
-  const snapshot = await get(signalRef).catch(() => null);
-  if (!snapshot || !snapshot.exists()) {
-    return;
-  }
-
-  const currentValue = snapshot.val() || {};
-  if (!currentValue || !currentValue.sessionId || currentValue.sessionId !== activeSessionId) {
-    return;
-  }
-
-  const refreshedValue = {
-    ...currentValue,
-    sessionId: activeSessionId,
-    updatedAt: serverNow(),
-    leaseUntil: serverNow() + STALE_ROOM_TTL_MS
-  };
-
-  await set(signalRef, refreshedValue);
-}
-
-function startParticipantLeaseLoop(roomName) {
-  if (!roomName || !localParticipantRole || !activeSessionId) return;
-
-  stopParticipantLeaseLoop();
-
-  const onTick = () => {
-    if (!activeRoomName || activeRoomName !== roomName || !localParticipantRole || !activeSessionId) {
-      stopParticipantLeaseLoop();
-      return;
-    }
-    renewParticipantLease(roomName);
-  };
-
-  // Timers inside a Worker are not throttled/frozen like background-tab timers,
-  // so a waiting host keeps its lease alive while the tab is hidden.
-  try {
-    const workerSource = `setInterval(() => postMessage(0), ${PARTICIPANT_LEASE_REFRESH_MS});`;
-    const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }));
-    participantLeaseWorker = new Worker(workerUrl);
-    URL.revokeObjectURL(workerUrl);
-    participantLeaseWorker.onmessage = onTick;
-    participantLeaseWorker.onerror = () => {
-      if (participantLeaseWorker) {
-        participantLeaseWorker.terminate();
-        participantLeaseWorker = null;
-      }
-      if (!participantLeaseTimer) {
-        participantLeaseTimer = setInterval(onTick, PARTICIPANT_LEASE_REFRESH_MS);
-      }
-    };
-  } catch (err) {
-    participantLeaseWorker = null;
-    participantLeaseTimer = setInterval(onTick, PARTICIPANT_LEASE_REFRESH_MS);
-  }
-}
-
-// Renew immediately when the tab wakes up / regains network, and re-register the
-// server-side disconnect hook after a Firebase reconnect (it is lost on disconnect).
-async function reassertPresence() {
-  const roomName = activeRoomName;
-  if (!roomName || !localParticipantRole || !activeSessionId) return;
-
-  await renewParticipantLease(roomName);
-  try {
-    const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
-    await onDisconnect(ownPresenceRef).remove();
-  } catch (err) {
-    console.warn('Could not re-register onDisconnect:', err);
-  }
-}
-
-onValue(ref(db, '.info/connected'), (snapshot) => {
-  if (snapshot.val() === true) {
-    reassertPresence();
-  }
-});
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') reassertPresence();
-});
-window.addEventListener('online', reassertPresence);
-window.addEventListener('focus', reassertPresence);
-
-function getRemoteParticipantRole() {
-  if (localParticipantRole === 'caller') return 'callee';
-  if (localParticipantRole === 'callee') return 'caller';
-  return null;
-}
-
-async function publishOwnPresence(roomName) {
-  if (!roomName || !localParticipantRole || !activeSessionId) return;
-
-  const ownPresenceRef = ref(db, `rooms/${roomName}/participants/${localParticipantRole}`);
-  await set(ownPresenceRef, buildParticipantLease(activeSessionId, localParticipantRole));
-  await refreshActiveRoomSignalLease(roomName);
-  await onDisconnect(ownPresenceRef).remove();
-  startParticipantLeaseLoop(roomName);
-}
-
-async function claimRoleSlot(roomName, role, sessionId) {
-  const slotRef = ref(db, `rooms/${roomName}/participants/${role}`);
-  const claimResult = await runTransaction(slotRef, currentValue => {
-    const now = serverNow();
-    const shouldReplace = !currentValue || !currentValue.sessionId || currentValue.sessionId === sessionId || (
-      typeof currentValue.leaseUntil === 'number'
-        ? currentValue.leaseUntil <= now
-        : now - (Number(currentValue.updatedAt) || now) > STALE_ROOM_TTL_MS
-    );
-
-    if (shouldReplace) {
-      return buildParticipantLease(sessionId, role);
-    }
-
-    return;
-  }, { applyLocally: false });
-
-  return claimResult.committed;
-}
-
-async function cleanupStaleRoomState(roomName) {
-  if (!roomName) return;
-
-  pruneRoomAttempts();
-
-  const roomRef = ref(db, `rooms/${roomName}`);
-  const roomSnapshot = await get(roomRef);
-  if (!roomSnapshot.exists()) return;
-
-  const roomData = roomSnapshot.val() || {};
-  const participants = roomData.participants || {};
-  const stalePaths = [];
-  const now = serverNow();
-
-  Object.entries(participants).forEach(([role, participant]) => {
-    if (!participant || !participant.sessionId) return;
-    if (activeSessionId && participant.sessionId === activeSessionId) return;
-    if (isLeaseExpired(participant, now, STALE_CLEANUP_GRACE_MS)) {
-      stalePaths.push(ref(db, `rooms/${roomName}/participants/${role}`));
-    }
-  });
-
-  const offerData = roomData.offer || null;
-  if (offerData && offerData.sessionId && (!activeSessionId || offerData.sessionId !== activeSessionId) && isLeaseExpired(offerData, now, STALE_CLEANUP_GRACE_MS)) {
-    stalePaths.push(ref(db, `rooms/${roomName}/offer`));
-  }
-
-  const answerData = roomData.answer || null;
-  if (answerData && answerData.sessionId && (!activeSessionId || answerData.sessionId !== activeSessionId) && isLeaseExpired(answerData, now, STALE_CLEANUP_GRACE_MS)) {
-    stalePaths.push(ref(db, `rooms/${roomName}/answer`));
-  }
-
-  if (roomData.callerCandidates && Object.keys(roomData.callerCandidates).length > 0) {
-    const staleCallerCandidates = Object.entries(roomData.callerCandidates)
-      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now, STALE_CLEANUP_GRACE_MS))
-      .map(([candidateId]) => ref(db, `rooms/${roomName}/callerCandidates/${candidateId}`));
-    stalePaths.push(...staleCallerCandidates);
-  }
-
-  if (roomData.calleeCandidates && Object.keys(roomData.calleeCandidates).length > 0) {
-    const staleCalleeCandidates = Object.entries(roomData.calleeCandidates)
-      .filter(([, candidateData]) => candidateData && candidateData.sessionId && (!activeSessionId || candidateData.sessionId !== activeSessionId) && isLeaseExpired(candidateData, now, STALE_CLEANUP_GRACE_MS))
-      .map(([candidateId]) => ref(db, `rooms/${roomName}/calleeCandidates/${candidateId}`));
-    stalePaths.push(...staleCalleeCandidates);
-  }
-
-  if (stalePaths.length === 0) return;
-
-  console.warn('[room-cleanup] removing stale room state', {
-    roomName,
-    paths: stalePaths.map(pathRef => pathRef.toString()),
-    serverTimeOffsetMs
-  });
-  await Promise.allSettled(stalePaths.map(pathRef => remove(pathRef)));
-  clearRoomAttempt(roomName);
-  statusText.innerText = 'Recovered stale room state.';
-}
-
-async function evaluateRoomAction(roomName) {
-  pruneRoomAttempts();
-  await cleanupStaleRoomState(roomName);
-
-  const roomSnapshot = await get(ref(db, `rooms/${roomName}`));
-  if (!roomSnapshot.exists()) {
-    return { mode: 'start' };
-  }
-
-  const roomData = roomSnapshot.val() || {};
-  const offerData = roomData.offer || null;
-  const participantsData = roomData.participants || {};
-  const callerPresence = participantsData.caller || null;
-  const calleePresence = participantsData.callee || null;
-
-  const callerActive = hasActiveLease(callerPresence);
-  const calleeActive = hasActiveLease(calleePresence);
-  const hasJoinableOffer = Boolean(
-    offerData &&
-    offerData.sdp &&
-    offerData.sdp.type === 'offer' &&
-    offerData.sessionId &&
-    !isLeaseExpired(offerData, serverNow(), STALE_CLEANUP_GRACE_MS)
-  );
-
-  console.info('[room-eval]', {
-    roomName,
-    hasOffer: Boolean(offerData),
-    offerLeaseRemainingMs: offerData && typeof offerData.leaseUntil === 'number' ? offerData.leaseUntil - serverNow() : null,
-    offerAgeMs: offerData && offerData.updatedAt ? serverNow() - offerData.updatedAt : null,
-    callerActive,
-    calleeActive,
-    serverTimeOffsetMs,
-    hasJoinableOffer
-  });
-
-  if (hasJoinableOffer) {
-    if (calleeActive && calleePresence.sessionId === offerData.sessionId) {
-      return {
-        mode: 'full',
-        message: 'Room is already occupied by two participants.'
-      };
-    }
-
-    return {
-      mode: 'join'
-    };
-  }
-
-  if (callerActive || calleeActive) {
-    return {
-      mode: 'busy',
-      message: 'Room is in transition. Ask both peers to disconnect and retry.'
-    };
-  }
-
-  return { mode: 'start' };
-}
-
-function clearJoinTimeout() {
-  if (joinTimeoutId) {
-    clearTimeout(joinTimeoutId);
-    joinTimeoutId = null;
-  }
-}
-
-function unsubscribeRoomListeners() {
-  signalingUnsubscribers.forEach(unsubscribe => unsubscribe());
-  signalingUnsubscribers = [];
-}
-
-function clearMediaRecoveryState() {
-  if (mediaRecoveryTimeoutId) {
-    clearTimeout(mediaRecoveryTimeoutId);
-    mediaRecoveryTimeoutId = null;
-  }
-  mediaRecoveryInProgress = false;
-}
-
-function clearReconnectTimer() {
-  if (reconnectTimerId) {
-    clearTimeout(reconnectTimerId);
-    reconnectTimerId = null;
-  }
-}
-
-async function beginReconnectFlow(roomName) {
-  if (!roomName || !localParticipantRole || reconnectInProgress) return;
-
-  reconnectInProgress = true;
-  remotePresenceSeen = false;
-  clearReconnectTimer();
-  clearJoinTimeout();
-  stopParticipantLeaseLoop();
-  unsubscribeRoomListeners();
-  closePeerConnection();
-
-  const reconnectAttempt = reconnectAttemptCount + 1;
-  statusText.innerText = `Connection lost. Reconnecting${reconnectAttempt > 1 ? ` (attempt ${reconnectAttempt})` : ''}...`;
-
-  try {
-    if (localParticipantRole === 'caller') {
-      activeSessionId = createSessionId();
-      rememberRoomAttempt(roomName, activeSessionId, localParticipantRole);
-      createPeerConnection(roomName);
-      listenToRoom(roomName);
-
-      const offer = await peerConnection.createOffer();
-      const localOfferDescription = await setLocalDescriptionSafely(peerConnection, offer);
-      const offerRef = ref(db, `rooms/${roomName}/offer`);
-      await set(offerRef, {
-        sessionId: activeSessionId,
-        updatedAt: serverNow(),
-        leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
-        sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
-      });
-      await publishOwnPresence(roomName);
-    } else {
-      activeSessionId = null;
-      rememberRoomAttempt(roomName, null, localParticipantRole);
-      createPeerConnection(roomName);
-      listenToRoom(roomName);
-    }
-
-    reconnectAttemptCount = 0;
-  } catch (err) {
-    console.error('Reconnect failed:', err);
-    reconnectAttemptCount += 1;
-    if (reconnectAttemptCount < 4) {
-      const delayMs = Math.min(1000 * Math.pow(2, reconnectAttemptCount - 1), 8000);
-      reconnectTimerId = setTimeout(async () => {
-        reconnectTimerId = null;
-        await beginReconnectFlow(roomName);
-      }, delayMs);
-      return;
-    }
-
-    await resetCallSession('Connection lost. Press Call to retry.');
-  } finally {
-    reconnectInProgress = false;
-  }
-}
-
-function closePeerConnection() {
-  if (!peerConnection) return;
-
-  webRtcDebugger.stop();
-
-  clearRemoteMediaWatchdog();
-  clearMediaRecoveryState();
-  remoteMediaReady = false;
-
-  peerConnection.ontrack = null;
-  peerConnection.onicecandidate = null;
-  peerConnection.onconnectionstatechange = null;
-  peerConnection.close();
-  peerConnection = null;
-  remoteStream = null;
-  remoteIceQueue = [];
-  destroyRemoteAudioGraph();
-}
-
-function getRoomCleanupRefs(roomName, role) {
-  if (!roomName || !role) return [];
-
-  const { offer, candidates, participant } = getRoomCleanupPaths(roomName, role);
-  return [ref(db, offer), ref(db, candidates), ref(db, participant)];
-}
-
-function getFullRoomCleanupRefs(roomName) {
-  if (!roomName) return [];
-
-  return [
-    ref(db, `rooms/${roomName}/offer`),
-    ref(db, `rooms/${roomName}/answer`),
-    ref(db, `rooms/${roomName}/callerCandidates`),
-    ref(db, `rooms/${roomName}/calleeCandidates`),
-    ref(db, `rooms/${roomName}/participants/caller`),
-    ref(db, `rooms/${roomName}/participants/callee`)
-  ];
-}
-
-async function cleanupRoomArtifacts() {
-  if (!activeRoomName) return;
-
-  await Promise.allSettled(
-    getFullRoomCleanupRefs(activeRoomName).map(pathRef => remove(pathRef))
-  );
-  clearRoomAttempt(activeRoomName);
-}
-
-async function resetCallSession(statusMessage) {
-  stopElapsedTimer({ reset: true });
-  stopParticipantLeaseLoop();
-  clearJoinTimeout();
-  clearReconnectTimer();
-  clearRemoteMediaWatchdog();
-  clearMediaRecoveryState();
-  unsubscribeRoomListeners();
-  closePeerConnection();
-  remoteVideo.srcObject = null;
-  reconnectAttemptCount = 0;
-  const roomBeingReset = activeRoomName;
-  await cleanupRoomArtifacts();
-  if (roomBeingReset) {
-    clearRoomAttempt(roomBeingReset);
-  }
-  activeRoomName = null;
-  roomSignalDebugger.setRoomName(null);
-  localParticipantRole = null;
-  activeSessionId = null;
-  remotePresenceSeen = false;
-  remoteMediaReady = false;
-  reconnectInProgress = false;
-  setCallButtonsEnabled(Boolean(localStream));
-  syncCallButtonMode();
-
-  if (statusMessage) {
-    statusText.innerText = statusMessage;
-  }
-}
-
-function clearRemoteMediaWatchdog() {
-  if (remoteMediaWatchdogId) {
-    clearTimeout(remoteMediaWatchdogId);
-    remoteMediaWatchdogId = null;
-  }
-}
-
-function updatePeerConnectionStatusText() {
-  if (!peerConnection) return;
-
-  if (peerConnection.connectionState === 'connected') {
-    if (remoteStream && remoteStream.getTracks().length > 0) {
-      statusText.innerText = 'Connected';
-      return;
-    }
-
-    statusText.innerText = 'Connected to signaling. Waiting for media...';
-    return;
-  }
-
-  if (peerConnection.connectionState === 'connecting') {
-    if (statusText.innerText === 'Connected to signaling. Waiting for media...') {
-      return;
-    }
-  }
-}
-
-function clearMediaWatchdog() {
-  if (remoteMediaWatchdogId) {
-    clearTimeout(remoteMediaWatchdogId);
-    remoteMediaWatchdogId = null;
-  }
-}
-
-async function recoverStalledMediaPath(roomName) {
-  if (!roomName || !peerConnection || mediaRecoveryInProgress) {
-    return;
-  }
-
-  mediaRecoveryInProgress = true;
-  statusText.innerText = 'Media path stalled. Refreshing ICE...';
-
-  try {
-    if (typeof peerConnection.restartIce === 'function') {
-      peerConnection.restartIce();
-    }
-  } catch (err) {
-    console.warn('ICE restart failed during media recovery:', err);
-  }
-
-  if (mediaRecoveryTimeoutId) {
-    clearTimeout(mediaRecoveryTimeoutId);
-  }
-
-  mediaRecoveryTimeoutId = setTimeout(async () => {
-    const stillHasRemoteTracks = Boolean(remoteStream && remoteStream.getTracks().length > 0);
-    if (peerConnection && peerConnection.connectionState === 'connected' && !stillHasRemoteTracks) {
-      await resetCallSession('Media path stalled after ICE refresh. Please try the room again.');
-      return;
-    }
-
-    mediaRecoveryInProgress = false;
-    mediaRecoveryTimeoutId = null;
-    if (peerConnection && peerConnection.connectionState === 'connected') {
-      updatePeerConnectionStatusText();
-    }
-  }, 5000);
-}
-
-function scheduleMediaWatchdog(roomName) {
-  clearMediaWatchdog();
-  remoteMediaWatchdogId = setTimeout(async () => {
-    if (!roomName || !peerConnection || peerConnection.connectionState !== 'connected') {
-      clearMediaWatchdog();
-      return;
-    }
-
-    if (!remoteStream || remoteStream.getTracks().length === 0) {
-      await recoverStalledMediaPath(roomName);
-    }
-  }, 8000);
-}
-
-async function addRemoteIceCandidate(candidateData) {
-  if (!peerConnection) return;
-
-  const iceCandidate = new RTCIceCandidate(candidateData);
-  if (!peerConnection.remoteDescription) {
-    remoteIceQueue.push(iceCandidate);
-    return;
-  }
-
-  await peerConnection.addIceCandidate(iceCandidate);
-}
-
-async function flushRemoteIceQueue() {
-  while (peerConnection && peerConnection.remoteDescription && remoteIceQueue.length > 0) {
-    const candidate = remoteIceQueue.shift();
-
-    try {
-      await peerConnection.addIceCandidate(candidate);
-    } catch (err) {
-      console.warn('Queued ICE candidate skipped:', err);
-    }
-  }
-}
-
 function ensureLocalStreamReady() {
   if (localStream) return true;
 
@@ -2207,107 +1526,6 @@ async function init() {
   }
 }
 
-function createPeerConnection(roomName, { forceRelay = false } = {}) {
-  if (!localStream) {
-    throw new Error('Local media stream is not ready.');
-  }
-
-  closePeerConnection();
-  peerConnection = new RTCPeerConnection(buildRtcConfig({ forceRelay }));
-  remoteStream = new MediaStream();
-  remoteVideo.srcObject = remoteStream;
-  tryPlayRemoteVideo();
-  remoteIceQueue = [];
-
-  const audioTrack = localStream.getAudioTracks()[0];
-  const videoTrack = localStream.getVideoTracks()[0];
-
-  if (audioTrack) {
-    const audioSender = peerConnection.addTrack(audioTrack, localStream);
-    applyAudioSenderEncodingPreferences(audioSender);
-  }
-
-  if (videoTrack) {
-    const videoSender = peerConnection.addTrack(videoTrack, localStream);
-    const videoParameters = videoSender.getParameters();
-    videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
-      ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'high', maxBitrate: getVideoBitrateBps() }))
-      : [{ priority: 'high', maxBitrate: getVideoBitrateBps() }];
-    videoParameters.degradationPreference = 'maintain-framerate';
-    videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
-  }
-
-  webRtcDebugger.start(peerConnection, localStream);
-  remoteMediaReady = false;
-  clearRemoteMediaWatchdog();
-  clearMediaRecoveryState();
-
-  peerConnection.ontrack = (event) => {
-    if (!remoteStream) {
-      remoteStream = new MediaStream();
-      remoteVideo.srcObject = remoteStream;
-      tryPlayRemoteVideo();
-    }
-
-    const existingTrackIds = new Set(remoteStream.getTracks().map(track => track.id));
-    if (!existingTrackIds.has(event.track.id)) {
-      remoteStream.addTrack(event.track);
-    }
-
-    event.track.addEventListener('unmute', () => {
-      tryPlayRemoteVideo();
-    });
-
-    remoteMediaReady = true;
-    clearRemoteMediaWatchdog();
-    clearMediaRecoveryState();
-    if (peerConnection.connectionState === 'connected' || peerConnection.signalingState === 'stable') {
-      statusText.innerText = 'Connected';
-    }
-    tryPlayRemoteVideo();
-  };
-
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      const candidateId = `candidate_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const candidateGroup = localParticipantRole === 'caller' ? 'callerCandidates' : 'calleeCandidates';
-      const candRef = ref(db, `rooms/${roomName}/${candidateGroup}/${candidateId}`);
-      const candidatePayload = {
-        sessionId: activeSessionId,
-        updatedAt: serverNow(),
-        leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
-        candidate: event.candidate.toJSON()
-      };
-      set(candRef, candidatePayload).catch(err => {
-        console.error('Failed to publish ICE candidate:', err);
-      });
-    }
-  };
-
-  peerConnection.onconnectionstatechange = () => {
-    if (peerConnection.connectionState === 'connected') {
-      clearJoinTimeout();
-      updatePeerConnectionStatusText();
-      clearRemoteMediaWatchdog();
-      reconnectAttemptCount = 0;
-      scheduleMediaWatchdog(activeRoomName);
-      return;
-    }
-
-    if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
-      clearRemoteMediaWatchdog();
-      clearMediaRecoveryState();
-      if (!activeRoomName || !localParticipantRole || reconnectInProgress) {
-        return;
-      }
-
-      beginReconnectFlow(activeRoomName).catch(err => {
-        console.error('Reconnect flow failed after connection loss:', err);
-      });
-    }
-  };
-}
-
 function getValidatedKey() {
   const key = roomKeyInput.value.trim().replace(/[^a-zA-Z0-9-_]/g, '');
   if (!key) {
@@ -2317,88 +1535,134 @@ function getValidatedKey() {
   return key;
 }
 
-async function beginStartRoom(roomName) {
-  if (!ensureLocalStreamReady()) return;
+// CALL SESSION START
+// Signaling, presence and recovery live in meeting-session.js; this section
+// only connects that module to local media and the UI.
 
-  activeRoomName = roomName;
-  roomSignalDebugger.setRoomName(roomName);
-  localParticipantRole = 'caller';
-  activeSessionId = createSessionId();
-  rememberRoomAttempt(roomName, activeSessionId, localParticipantRole);
-  remotePresenceSeen = false;
-  syncCallButtonMode();
-  statusText.innerText = `Initializing room "${roomName}"...`;
+const CALL_STATUS_TEXT = {
+  joining: roomName => `Joining room "${roomName}"...`,
+  waiting: roomName => `In room "${roomName}". Waiting for the other person to join...`,
+  connecting: () => 'Connecting...',
+  connected: () => 'Connected',
+  recovering: () => 'Connection unstable. Reconnecting...',
+  'peer-left': roomName => `The other person left. Waiting in room "${roomName}"...`,
+  full: roomName => `Room "${roomName}" is full. If you just reloaded, try again in a minute.`,
+  error: () => 'Could not join the room. Check Firebase connectivity and try again.'
+};
 
-  try {
-    const callerSlotClaimed = await claimRoleSlot(roomName, 'caller', activeSessionId);
-    if (!callerSlotClaimed) {
-      await resetCallSession('Room is already occupied by another active caller.');
-      return;
-    }
+let elapsedTimerNeedsReset = false;
 
-    await Promise.allSettled([
-      remove(ref(db, `rooms/${roomName}/offer`)),
-      remove(ref(db, `rooms/${roomName}/answer`)),
-      remove(ref(db, `rooms/${roomName}/callerCandidates`)),
-      remove(ref(db, `rooms/${roomName}/calleeCandidates`))
-    ]);
+// Adds the local tracks (with our encoding preferences) to a new peer connection.
+function attachLocalMedia(pc) {
+  const audioTrack = localStream.getAudioTracks()[0];
+  const videoTrack = localStream.getVideoTracks()[0];
 
-    createPeerConnection(roomName);
-    listenToRoom(roomName);
+  if (audioTrack) {
+    const audioSender = pc.addTrack(audioTrack, localStream);
+    applyAudioSenderEncodingPreferences(audioSender);
+  }
 
-    const offer = await peerConnection.createOffer();
-    const localOfferDescription = await setLocalDescriptionSafely(peerConnection, offer);
-
-    const offerRef = ref(db, `rooms/${roomName}/offer`);
-    const offerPayload = {
-      sessionId: activeSessionId,
-      updatedAt: serverNow(),
-      leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
-      sdp: { type: localOfferDescription.type, sdp: localOfferDescription.sdp }
-    };
-    await set(offerRef, offerPayload);
-
-    await publishOwnPresence(roomName);
-
-    statusText.innerText = `Room "${roomName}" created. Waiting for friend to join...`;
-    startElapsedTimer({ reset: true });
-  } catch (err) {
-    console.error('Failed to start room:', err);
-    await resetCallSession('Could not create the room. Check Firebase connectivity and try again.');
+  if (videoTrack) {
+    const videoSender = pc.addTrack(videoTrack, localStream);
+    const videoParameters = videoSender.getParameters();
+    videoParameters.encodings = videoParameters.encodings && videoParameters.encodings.length > 0
+      ? videoParameters.encodings.map(encoding => ({ ...encoding, priority: 'high', maxBitrate: getVideoBitrateBps() }))
+      : [{ priority: 'high', maxBitrate: getVideoBitrateBps() }];
+    videoParameters.degradationPreference = 'maintain-framerate';
+    videoSender.setParameters(videoParameters).catch(err => console.error('Video sender parameter error:', err));
   }
 }
 
-async function beginJoinRoom(roomName, autoDetected = false) {
-  if (!ensureLocalStreamReady()) return;
+function handleRemoteTrack(event) {
+  if (!remoteStream) {
+    remoteStream = new MediaStream();
+    remoteVideo.srcObject = remoteStream;
+  }
 
-  startElapsedTimer({ reset: true });
+  const existingTrackIds = new Set(remoteStream.getTracks().map(track => track.id));
+  if (!existingTrackIds.has(event.track.id)) {
+    remoteStream.addTrack(event.track);
+  }
 
+  event.track.addEventListener('unmute', () => {
+    tryPlayRemoteVideo();
+  });
+
+  tryPlayRemoteVideo();
+}
+
+// Called by the session whenever the active peer connection changes (or goes away).
+function handlePeerConnectionChange(pc) {
+  if (peerConnection) {
+    webRtcDebugger.stop();
+    remoteStream = null;
+    remoteVideo.srcObject = null;
+    destroyRemoteAudioGraph();
+  }
+
+  peerConnection = pc || null;
+
+  if (!peerConnection) {
+    stopElapsedTimer({ reset: true });
+    return;
+  }
+
+  remoteStream = new MediaStream();
+  remoteVideo.srcObject = remoteStream;
+  tryPlayRemoteVideo();
+  webRtcDebugger.start(peerConnection, localStream);
+  elapsedTimerNeedsReset = true;
+}
+
+function handleCallStatus(phase) {
+  if (phase === 'connected' && elapsedTimerNeedsReset) {
+    elapsedTimerNeedsReset = false;
+    startElapsedTimer({ reset: true });
+  }
+
+  const statusFor = CALL_STATUS_TEXT[phase];
+  if (statusFor) {
+    statusText.innerText = statusFor(activeRoomName);
+  }
+
+  // The session has ended by itself; reset the UI but keep the message.
+  if (phase === 'full' || phase === 'error') {
+    endCallSession();
+  }
+}
+
+function startCallSession(roomName) {
   activeRoomName = roomName;
   roomSignalDebugger.setRoomName(roomName);
-  localParticipantRole = 'callee';
-  activeSessionId = null;
-  rememberRoomAttempt(roomName, null, localParticipantRole);
-  remotePresenceSeen = false;
   syncCallButtonMode();
-  statusText.innerText = `Connecting to room "${roomName}"...`;
 
-  if (autoDetected) {
-    statusText.innerText = `Room "${roomName}" already exists. Joining it...`;
+  meetingSession = createMeetingSession({
+    db,
+    roomName,
+    rtcConfig: buildRtcConfig(),
+    preparePeerConnection: attachLocalMedia,
+    onStatus: handleCallStatus,
+    onPeerConnection: handlePeerConnectionChange,
+    onRemoteTrack: handleRemoteTrack
+  });
+}
+
+async function endCallSession(statusMessage) {
+  const session = meetingSession;
+  meetingSession = null;
+  activeRoomName = null;
+  roomSignalDebugger.setRoomName(null);
+  setCallButtonsEnabled(Boolean(localStream));
+  syncCallButtonMode();
+
+  if (statusMessage) {
+    statusText.innerText = statusMessage;
   }
 
-  try {
-    createPeerConnection(roomName);
-    listenToRoom(roomName);
-    clearJoinTimeout();
-    joinTimeoutId = setTimeout(() => {
-      if (peerConnection && !peerConnection.remoteDescription) {
-        resetCallSession(`No active call was found for room "${roomName}".`);
-      }
-    }, 15000);
-  } catch (err) {
-    console.error('Failed to join room:', err);
-    await resetCallSession('Could not join the room. Check the shared key and try again.');
+  if (session) {
+    await session.leave();
   }
+  handlePeerConnectionChange(null);
 }
 
 callBtn.addEventListener('click', async () => {
@@ -2408,155 +1672,27 @@ callBtn.addEventListener('click', async () => {
   resumeSharedAudioContext();
 
   if (activeRoomName) {
-    await resetCallSession('Disconnected. Enter a key above to call again.');
+    await endCallSession('Disconnected. Enter a key above to call again.');
     return;
   }
+
+  if (!ensureLocalStreamReady()) return;
 
   const roomName = getValidatedKey();
   if (!roomName) return;
 
-  try {
-    const decision = await evaluateRoomAction(roomName);
+  if (!(await ensureFirebaseAuth())) return;
 
-    if (decision.mode === 'full' || decision.mode === 'busy') {
-      statusText.innerText = decision.message;
-      return;
-    }
-
-    if (decision.mode === 'join') {
-      await beginJoinRoom(roomName, true);
-      return;
-    }
-
-    await beginStartRoom(roomName);
-  } catch (err) {
-    console.error('Room evaluation failed:', err);
-    statusText.innerText = 'Could not evaluate room state. Try again.';
-  }
+  startCallSession(roomName);
 });
 
-function listenToRoom(roomName) {
-  unsubscribeRoomListeners();
-
-  const { remoteSdpPath, remoteCandidatesPath, remotePresencePath } = getRoomSignalPaths(roomName, localParticipantRole);
-
-  const unsubscribeSdp = onValue(ref(db, remoteSdpPath), async (snapshot) => {
-    const data = snapshot.val();
-    if (!data || !peerConnection || !data.sdp) return;
-
-    try {
-      const packetSessionId = data.sessionId || null;
-      const attempt = roomAttemptState.get(roomName) || null;
-
-      if (packetSessionId && attempt && attempt.sessionId && packetSessionId !== attempt.sessionId) {
-        return;
-      }
-
-      if (localParticipantRole === 'caller') {
-        if (!packetSessionId || packetSessionId !== activeSessionId) {
-          return;
-        }
-      } else if (localParticipantRole === 'callee') {
-        if (!packetSessionId) {
-          return;
-        }
-
-        if (!activeSessionId) {
-          activeSessionId = packetSessionId;
-          rememberRoomAttempt(roomName, packetSessionId, localParticipantRole);
-        } else if (packetSessionId !== activeSessionId) {
-          if (data.sdp.type !== 'offer') {
-            return;
-          }
-
-          statusText.innerText = 'Remote peer restarted. Re-establishing call...';
-          createPeerConnection(roomName);
-          activeSessionId = packetSessionId;
-          rememberRoomAttempt(roomName, packetSessionId, localParticipantRole);
-        }
-      }
-
-      const currentRemoteDescription = peerConnection.remoteDescription;
-      if (currentRemoteDescription && currentRemoteDescription.type === data.sdp.type && currentRemoteDescription.sdp === data.sdp.sdp) {
-        return;
-      }
-
-      if (peerConnection.signalingState === 'stable' && currentRemoteDescription) {
-        return;
-      }
-
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      await flushRemoteIceQueue();
-
-      if (data.sdp.type === 'offer' && localParticipantRole === 'callee' && !peerConnection.localDescription) {
-        const calleeSlotClaimed = await claimRoleSlot(roomName, 'callee', activeSessionId);
-        if (!calleeSlotClaimed) {
-          await resetCallSession('Room is already occupied by two participants.');
-          return;
-        }
-
-        clearJoinTimeout();
-        statusText.innerText = 'Processing call invitation...';
-        const answer = await peerConnection.createAnswer();
-        const localAnswerDescription = await setLocalDescriptionSafely(peerConnection, answer);
-
-        const answerRef = ref(db, `rooms/${roomName}/answer`);
-        await set(answerRef, {
-          sessionId: activeSessionId,
-          updatedAt: serverNow(),
-          leaseUntil: serverNow() + STALE_ROOM_TTL_MS,
-          sdp: { type: localAnswerDescription.type, sdp: localAnswerDescription.sdp }
-        });
-        await publishOwnPresence(roomName);
-
-        if (peerConnection.connectionState === 'connected' || peerConnection.signalingState === 'stable') {
-          if (remoteStream && remoteStream.getTracks().length > 0) {
-            statusText.innerText = 'Connected';
-          } else {
-            statusText.innerText = 'Answer transmitted. Waiting for media...';
-          }
-        } else {
-          statusText.innerText = 'Answer transmitted. Syncing streams...';
-        }
-      }
-    } catch (err) {
-      console.error('Remote SDP handling failed:', err);
-      await resetCallSession('Signaling failed while exchanging session data. Try again.');
-    }
-  });
-
-  const unsubscribeCandidates = onChildAdded(ref(db, remoteCandidatesPath), async (snapshot) => {
-    const data = snapshot.val();
-    if (!data || !data.candidate || !peerConnection) return;
-
-    if (!data.sessionId || !activeSessionId || data.sessionId !== activeSessionId) return;
-
-    try {
-      await addRemoteIceCandidate(data.candidate);
-    } catch (err) {
-      console.warn('ICE candidate skipped:', err);
-    }
-  });
-
-  const unsubscribeRemotePresence = onValue(ref(db, remotePresencePath), async (snapshot) => {
-    const remotePresence = snapshot.val();
-    if (remotePresence && remotePresence.sessionId === activeSessionId) {
-      const peerJoinedForFirstTime = !remotePresenceSeen;
-      remotePresenceSeen = true;
-
-      if (peerJoinedForFirstTime && localParticipantRole === 'caller') {
-        startElapsedTimer({ reset: true });
-      }
-      return;
-    }
-
-    if (remotePresenceSeen) {
-      await resetCallSession('Remote peer disconnected. You can press Call again.');
-    }
-  });
-
-  signalingUnsubscribers.push(unsubscribeSdp, unsubscribeCandidates, unsubscribeRemotePresence);
-}
+// Best effort; the Firebase server also removes our records via onDisconnect().
+window.addEventListener('beforeunload', () => {
+  if (meetingSession) {
+    meetingSession.leave();
+  }
+});
+// CALL SESSION END
 
 muteBtn.addEventListener('click', () => {
   if (!localStream) return;
@@ -2765,13 +1901,5 @@ bindDeviceSourceEvents(audioSource, {
   sourceApplier: applyAudioSourceById
 });
 
-function cleanupRoomOnExit() {
-  if (!activeRoomName || !localParticipantRole) return;
-
-  stopParticipantLeaseLoop();
-  getRoomCleanupRefs(activeRoomName, localParticipantRole).forEach(pathRef => remove(pathRef));
-}
-
-window.addEventListener('beforeunload', cleanupRoomOnExit);
 registerPwaServiceWorker();
 window.onload = init;

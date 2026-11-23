@@ -27,11 +27,13 @@ The room key is not a media route. It is simply the address at which two browser
 
 In practice, the flow is:
 
-1. Browser A creates a local stream.
-2. Browser A creates an offer and writes it to Firebase under `rooms/{room}/offer`.
-3. Browser B sees the offer, creates its own peer connection, and responds with an answer.
-4. Both browsers exchange ICE candidates through Firebase.
+1. Browser A creates a local stream and registers itself as a member of `rooms/{room}/members`.
+2. Browser B does the same. Both browsers now see each other in the member list.
+3. Each browser creates its peer connection; one sends an offer, the other an answer, through per-pair mailboxes under `rooms/{room}/signals`.
+4. Both browsers exchange ICE candidates through the same mailboxes.
 5. Once ICE succeeds, the browsers create a direct media path and the stream begins flowing peer-to-peer.
+
+The full signaling design (data model, lifecycle and recovery) is in [signaling-design.md](signaling-design.md).
 
 This is the standard WebRTC pattern for browser-to-browser communication.
 
@@ -60,18 +62,14 @@ The project imports Firebase JS SDK modules for:
 - `getDatabase()`
 - `getAuth()`
 - `signInAnonymously()`
-- `ref()`, `set()`, `get()`, `onValue()`, `onChildAdded()`, `remove()`, `runTransaction()`, `onDisconnect()`
+- `ref()`, `push()`, `set()`, `get()`, `onValue()`, `onChildAdded()`, `onChildRemoved()`, `remove()`, `runTransaction()`, `onDisconnect()`, `serverTimestamp()`
 
 The browser authenticates anonymously and then uses the Firebase Realtime Database as a lightweight coordination layer.
 
 The app writes signals such as:
 
-- `rooms/{roomName}/offer`
-- `rooms/{roomName}/answer`
-- `rooms/{roomName}/callerCandidates`
-- `rooms/{roomName}/calleeCandidates`
-- `rooms/{roomName}/participants/caller`
-- `rooms/{roomName}/participants/callee`
+- `rooms/{roomName}/members/{peerId}`: presence, removed by the server through `onDisconnect()`
+- `rooms/{roomName}/signals/{fromId}/{toId}/{pushId}`: SDP descriptions and ICE candidates for one peer pairing
 
 This is not media streaming. It is only metadata needed to establish the session.
 
@@ -116,10 +114,8 @@ Firebase in this project is not the media plane. It is the signaling plane.
 
 The app authenticates anonymously with Firebase and then writes only the metadata required to establish a call:
 
-- room offer data
-- room answer data
-- ICE candidates for each side
-- participant presence markers used to assign roles
+- member records (presence)
+- SDP offers/answers and ICE candidates, each stored under the sending peer's id
 
 This means the database is intentionally small and ephemeral. The app does not store audio or video in Firebase; it only stores handshake and coordination data needed to bring the two browsers together.
 
@@ -164,58 +160,27 @@ The key point is that the media path is not routed through Firebase. Firebase is
 
 ## 5. How the call establishment works in this app
 
-### 5.1 Room and role assignment
+### 5.1 Joining a room
 
-When the user clicks Call, the app validates a room key and evaluates whether the room is:
+When the user clicks Call, the app validates the room key and adds a fresh `peerId` to `rooms/{room}/members` with `runTransaction()` (at most two members). Server-side `onDisconnect()` handlers remove that record and the peer's signals when the browser goes away. There is no caller/callee role and no "start vs join" decision: both browsers run the same code.
 
-- new and startable
-- already occupied
-- already has an offer waiting for a joiner
+### 5.2 Negotiation
 
-The app uses Firebase participant slots:
+As soon as a browser sees the other member, it creates an `RTCPeerConnection` and adds its local tracks. Negotiation follows the W3C "perfect negotiation" pattern:
 
-- `participants/caller`
-- `participants/callee`
+1. the impolite side (decided by comparing the two peer ids) creates the offer;
+2. the polite side answers;
+3. offer collisions during later renegotiation (ICE restarts) are resolved by the pattern.
 
-The code uses `runTransaction()` to claim a role slot, ensuring only one active caller and one active callee can exist in a session.
+Descriptions are pushed to `rooms/{room}/signals/{self}/{remote}` and read by the other side with `onChildAdded()`.
 
-This avoids race conditions and prevents two peers from both assuming the same role.
+### 5.3 ICE candidate exchange
 
-### 5.2 Caller flow
+Each browser publishes ICE candidates as they are discovered through `peerConnection.onicecandidate`, into the same per-pair mailbox. The peer on the other side processes all messages from that mailbox strictly in order and calls `addIceCandidate()`.
 
-The caller:
+### 5.4 Recovery
 
-1. claims the `caller` slot
-2. cleans up stale room state for that room
-3. creates a new `RTCPeerConnection`
-4. adds local audio/video tracks with `addTrack()`
-5. creates an SDP offer
-6. sets it as the local description
-7. writes it to `rooms/{room}/offer`
-8. starts listening for the callee's answer and ICE candidates
-
-### 5.3 Callee flow
-
-The callee:
-
-1. detects that an offer already exists
-2. creates a peer connection
-3. listens to the offer and remote ICE candidates
-4. sets the remote description from the offer
-5. creates an answer
-6. publishes the answer to `rooms/{room}/answer`
-7. continues to receive and add ICE candidates
-
-### 5.4 ICE candidate exchange
-
-Each browser publishes ICE candidates as they are discovered through `peerConnection.onicecandidate`.
-
-The app writes each candidate into Firebase under the correct role-specific path:
-
-- caller's candidates go into `callerCandidates`
-- callee's candidates go into `calleeCandidates`
-
-The peer on the other side listens with `onChildAdded()` and calls `addIceCandidate()` as they arrive.
+If the connection drops, the app first performs an ICE restart. If the connection is still not established after about 30 seconds, it rejoins the room under a new peer id, and the other side builds a fresh connection. See [signaling-design.md](signaling-design.md).
 
 This is the normal WebRTC trick for NAT traversal: discover networking endpoints, send them to the remote side, and iterate until a viable route is found.
 
@@ -325,7 +290,7 @@ This app is intentionally minimal, and it has real-world constraints:
 - If both peers are behind restrictive NAT/firewall conditions, direct media may fail.
 - If TURN is unavailable or unreachable, the call may fail even though the room key and signaling exchange work.
 
-The app handles stale room state, participant roles, and cleanup patterns so that a room does not remain stuck when a peer disconnects or the call fails mid-flight.
+The app relies on server-side presence (`onDisconnect()`), per-peer data ownership and a two-step recovery (ICE restart, then rejoin) so that a room does not remain stuck when a peer disconnects or the call fails mid-flight.
 
 ---
 

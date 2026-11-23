@@ -61,43 +61,19 @@ class RoomSignalDebugger {
             <span id="room-debug-room-name" style="color:#fff;font-weight:700;">-</span>
           </div>
           <div style="display:flex;justify-content:space-between;gap:8px;margin-top:2px;">
-            <span style="color:#9ab7ff;">Role</span>
-            <span id="room-debug-local-role">-</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;gap:8px;margin-top:2px;">
-            <span style="color:#9ab7ff;">Session</span>
-            <span id="room-debug-session">-</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;gap:8px;margin-top:2px;">
-            <span style="color:#9ab7ff;">Conn</span>
-            <span id="room-debug-connection-state">-</span>
+            <span style="color:#9ab7ff;">Legacy data</span>
+            <span id="room-debug-legacy">-</span>
           </div>
         </div>
 
         <div style="padding:6px 8px;background:rgba(24,31,44,0.9);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">Participants</div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Caller</span><span id="room-debug-caller-state">-</span></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Callee</span><span id="room-debug-callee-state">-</span></div>
+          <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">Members (peer id, joined)</div>
+          <div id="room-debug-members">-</div>
         </div>
 
         <div style="padding:6px 8px;background:rgba(24,31,44,0.9);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">Offer / Answer</div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Offer</span><span id="room-debug-offer-state">-</span></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Offer age</span><span id="room-debug-offer-age">-</span></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Answer</span><span id="room-debug-answer-state">-</span></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Answer age</span><span id="room-debug-answer-age">-</span></div>
-        </div>
-
-        <div style="padding:6px 8px;background:rgba(24,31,44,0.9);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">ICE candidates</div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Caller</span><span id="room-debug-caller-candidates">0</span></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Callee</span><span id="room-debug-callee-candidates">0</span></div>
-        </div>
-
-        <div style="padding:6px 8px;background:rgba(24,31,44,0.9);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">Cleanup decision</div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Stale</span><span id="room-debug-stale-state">-</span></div>
-          <div style="display:flex;justify-content:space-between;gap:8px;"><span>Last action</span><span id="room-debug-last-action">idle</span></div>
+          <div style="font-weight:700;color:#8fd3ff;margin-bottom:4px;">Signals (from → to: descriptions / candidates)</div>
+          <div id="room-debug-signals">-</div>
         </div>
       </div>
     `;
@@ -299,102 +275,70 @@ class RoomSignalDebugger {
     if (status) status.style.color = reason === 'refresh error' ? '#ff6b6b' : '#ffce54';
     if (roomName) roomName.textContent = this.roomName || 'none';
 
-    const ids = [
-      'room-debug-local-role',
-      'room-debug-session',
-      'room-debug-connection-state',
-      'room-debug-caller-state',
-      'room-debug-callee-state',
-      'room-debug-offer-state',
-      'room-debug-offer-age',
-      'room-debug-answer-state',
-      'room-debug-answer-age',
-      'room-debug-caller-candidates',
-      'room-debug-callee-candidates',
-      'room-debug-stale-state',
-      'room-debug-last-action'
-    ];
-
-    ids.forEach((id) => {
+    ['room-debug-legacy', 'room-debug-members', 'room-debug-signals'].forEach((id) => {
       const el = document.getElementById(id);
-      if (el) {
-        el.textContent = id === 'room-debug-last-action' ? 'idle' : '-';
-      }
+      if (el) el.textContent = '-';
     });
   }
 
+  // Room layout (see docs/signaling-design.md):
+  //   members/{peerId} = { joinedAt }
+  //   signals/{fromId}/{toId}/{pushId} = { description } | { candidate }
   renderRoomSnapshot(roomData) {
     if (!this.hudElement) return;
 
-    const participants = roomData.participants || {};
-    const caller = participants.caller || {};
-    const callee = participants.callee || {};
-    const offer = roomData.offer || {};
-    const answer = roomData.answer || {};
-    const callerCandidates = roomData.callerCandidates || {};
-    const calleeCandidates = roomData.calleeCandidates || {};
+    const members = roomData.members || {};
+    const signals = roomData.signals || {};
     const now = Date.now();
-    const roomName = this.roomName || 'unknown';
+    const memberIds = Object.keys(members);
+    const legacyKeys = ['offer', 'answer', 'participants', 'callerCandidates', 'calleeCandidates']
+      .filter(key => roomData[key] !== undefined);
 
-    const callerSessionActive = this.hasLease(caller, now);
-    const calleeSessionActive = this.hasLease(callee, now);
-    const callerState = caller.sessionId ? `${caller.sessionId.slice(0, 8)}… ${this.formatAge(now - (caller.updatedAt || now))}` : 'empty';
-    const calleeState = callee.sessionId ? `${callee.sessionId.slice(0, 8)}… ${this.formatAge(now - (callee.updatedAt || now))}` : 'empty';
-    const offerIsPresent = Boolean(offer && offer.sdp && offer.sessionId);
-    const answerIsPresent = Boolean(answer && answer.sdp && answer.sessionId);
-    const stale = !callerSessionActive && !calleeSessionActive && (
-      this.isStale(caller, now)
-      || this.isStale(callee, now)
-      || this.isStale(offer, now)
-      || this.isStale(answer, now)
-    );
+    const status = document.getElementById('room-debug-status');
+    status.textContent = memberIds.length > 0 ? `LIVE (${memberIds.length})` : 'EMPTY';
+    status.style.color = memberIds.length > 0 ? '#7ef29a' : '#ffce54';
+    document.getElementById('room-debug-room-name').textContent = this.roomName || 'unknown';
+    document.getElementById('room-debug-legacy').textContent = legacyKeys.length > 0 ? legacyKeys.join(', ') : 'none';
 
-    document.getElementById('room-debug-status').textContent = stale ? 'STALE' : 'LIVE';
-    document.getElementById('room-debug-status').style.color = stale ? '#ff7f50' : '#7ef29a';
-    document.getElementById('room-debug-room-name').textContent = roomName;
-    document.getElementById('room-debug-local-role').textContent = 'watcher';
-    document.getElementById('room-debug-session').textContent = 'n/a';
-    document.getElementById('room-debug-connection-state').textContent = roomData.offer || roomData.answer ? 'signaling' : 'idle';
-    document.getElementById('room-debug-caller-state').textContent = callerState;
-    document.getElementById('room-debug-callee-state').textContent = calleeState;
-    document.getElementById('room-debug-offer-state').textContent = offerIsPresent ? 'present' : 'empty';
-    document.getElementById('room-debug-offer-age').textContent = offerIsPresent ? this.formatAge(now - (offer.updatedAt || now)) : '-';
-    document.getElementById('room-debug-answer-state').textContent = answerIsPresent ? 'present' : 'empty';
-    document.getElementById('room-debug-answer-age').textContent = answerIsPresent ? this.formatAge(now - (answer.updatedAt || now)) : '-';
-    document.getElementById('room-debug-caller-candidates').textContent = String(Object.keys(callerCandidates).length || 0);
-    document.getElementById('room-debug-callee-candidates').textContent = String(Object.keys(calleeCandidates).length || 0);
-    document.getElementById('room-debug-stale-state').textContent = stale ? 'yes' : 'no';
-    document.getElementById('room-debug-last-action').textContent = offerIsPresent || answerIsPresent ? 'snapshot' : 'idle';
+    const memberLines = memberIds.map((id) => {
+      const joinedAt = Number(members[id] && members[id].joinedAt);
+      const age = Number.isFinite(joinedAt) ? this.formatAge(now - joinedAt) : '-';
+      return `${this.shortId(id)}  ${age}`;
+    });
+    this.renderLines('room-debug-members', memberLines);
+
+    const signalLines = [];
+    Object.entries(signals).forEach(([fromId, mailboxes]) => {
+      Object.entries(mailboxes || {}).forEach(([toId, messages]) => {
+        const list = Object.values(messages || {});
+        const descriptions = list.filter(message => message && message.description).length;
+        const candidates = list.filter(message => message && message.candidate).length;
+        signalLines.push(`${this.shortId(fromId)} → ${this.shortId(toId)}: ${descriptions} / ${candidates}`);
+      });
+    });
+    this.renderLines('room-debug-signals', signalLines);
   }
 
-  hasLease(entry, now) {
-    if (!entry || !entry.sessionId) {
-      return false;
+  renderLines(elementId, lines) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+
+    el.textContent = '';
+    if (lines.length === 0) {
+      el.textContent = 'none';
+      return;
     }
 
-    if (Number.isFinite(Number(entry.leaseUntil))) {
-      return Number(entry.leaseUntil) > now;
-    }
-
-    return Boolean(entry.sessionId);
+    lines.forEach((line) => {
+      const row = document.createElement('div');
+      row.textContent = line;
+      el.appendChild(row);
+    });
   }
 
-  isStale(entry, now) {
-    if (!entry) {
-      return false;
-    }
-
-    const remoteLeaseUntil = Number(entry.leaseUntil);
-    if (Number.isFinite(remoteLeaseUntil)) {
-      return now >= remoteLeaseUntil;
-    }
-
-    if (!entry.updatedAt || !Number.isFinite(Number(entry.updatedAt))) {
-      return false;
-    }
-
-    const age = now - Number(entry.updatedAt);
-    return age > 45000;
+  shortId(id) {
+    const value = String(id || '');
+    return value.length > 8 ? `…${value.slice(-6)}` : value;
   }
 
   formatAge(ageMs) {
